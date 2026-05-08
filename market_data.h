@@ -7,14 +7,27 @@
 #include <vector>
 #include <map>
 
+// Data source mode
+enum DataSourceMode {
+    SOURCE_FILE = 0,    // Load from CSV files (original behavior)
+    SOURCE_IQFEED = 1   // Fetch from iqfeed HTTP API
+};
+
+
 // Market data manager for loading and streaming simulation data
 class MarketData {
 public:
     MarketData();
     ~MarketData();
 
-    // Set the data directory
+    // Set the data directory (for file-based loading)
     void set_data_dir(const char* dir);
+
+    // Set data source mode (file or iqfeed API)
+    void set_data_source(DataSourceMode mode);
+
+    // Set iqfeed API base URL (e.g., "http://localhost:8080")
+    void set_api_url(const char* url);
 
     // Check if data exists for a symbol
     bool has_symbol(const char* symbol) const;
@@ -67,6 +80,8 @@ private:
     };
 
     std::string m_data_dir;
+    std::string m_api_url;
+    DataSourceMode m_source_mode;
     std::map<std::string, SymbolData> m_symbols;
     bool m_running;
     size_t m_sim_index;
@@ -74,10 +89,16 @@ private:
     int64_t m_current_timestamp;
     char m_error[256];
 
-    // Parsers
+    // File-based parsers
     bool parse_level2_csv(const char* filepath, const char* symbol);
     bool parse_timesales_csv(const char* filepath, const char* symbol);
     bool parse_candles_csv(const char* filepath, std::vector<Candle>& candles);
+
+    // API-based loading
+    bool load_symbol_from_api(const char* symbol);
+    bool fetch_daily_candles(const char* symbol, std::vector<Candle>& candles);
+    bool fetch_minute_candles(const char* symbol, int interval_secs, std::vector<Candle>& candles);
+    bool parse_csv_response(const std::string& csv, std::vector<Candle>& candles);
 
     // Level 2 color assignment
     static ImU32 get_level_color(int level_index, bool is_bid);

@@ -55,12 +55,12 @@ ifeq ($(UNAME_S), Darwin)
     IMGUI_CXXFLAGS += -I/opt/homebrew/include -I/usr/local/include
     TEST_CXXFLAGS += -I/opt/homebrew/include -I/usr/local/include
     LDFLAGS += -L/opt/homebrew/lib -L/usr/local/lib
-    LDFLAGS += -lglfw -lsqlite3 -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo
-    TEST_LDFLAGS = -L/opt/homebrew/lib -L/usr/local/lib -lsqlite3
+    LDFLAGS += -lglfw -lsqlite3 -lcurl -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo
+    TEST_LDFLAGS = -L/opt/homebrew/lib -L/usr/local/lib -lsqlite3 -lcurl
 else
     # Linux
-    LDFLAGS += -lglfw -lGL -ldl -lsqlite3
-    TEST_LDFLAGS = -lsqlite3
+    LDFLAGS += -lglfw -lGL -ldl -lsqlite3 -lcurl
+    TEST_LDFLAGS = -lsqlite3 -lcurl
 endif
 
 # ImGui sources
@@ -78,7 +78,7 @@ CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 IMGUI_CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 
 # Main sources
-MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp
+MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp
 MAIN_OBJS = $(MAIN_SRCS:.cpp=.o)
 
 TARGET = ucharts
@@ -134,14 +134,14 @@ test_logic: test_logic.cpp
 test_database: test_database.cpp database.cpp
 	$(CXX) $(TEST_CXXFLAGS) -o $@ test_database.cpp database.cpp $(TEST_LDFLAGS)
 
-test_market_data: test_market_data.cpp market_data.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_market_data.cpp market_data.cpp
+test_market_data: test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
 
-test_order_manager: test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp $(TEST_LDFLAGS)
+test_order_manager: test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
 
-test_integration: test_integration.cpp order_manager.cpp database.cpp market_data.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp $(TEST_LDFLAGS)
+test_integration: test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
 
 clean:
 	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_ucharts.db test_order_manager.db test_integration.db

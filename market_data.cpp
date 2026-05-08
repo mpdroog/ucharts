@@ -1,5 +1,7 @@
 // market_data.cpp - Market data loading and simulation implementation
 #include "market_data.h"
+#include "http_client.h"
+#include "json_parser.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -40,7 +42,8 @@ static const ImU32 g_ask_colors[] = {
 };
 
 MarketData::MarketData()
-    : m_data_dir("data"), m_running(false), m_sim_index(0), m_current_timestamp(0) {
+    : m_data_dir("data"), m_api_url("http://localhost:8080"), m_source_mode(SOURCE_IQFEED),
+      m_running(false), m_sim_index(0), m_current_timestamp(0) {
     m_current_time[0] = '\0';
     m_error[0] = '\0';
 }
@@ -53,6 +56,17 @@ void MarketData::set_data_dir(const char* dir) {
     m_data_dir = dir;
 }
 
+void MarketData::set_data_source(DataSourceMode mode) {
+    m_source_mode = mode;
+}
+
+void MarketData::set_api_url(const char* url) {
+    if (url != nullptr) {
+        m_api_url = url;
+        get_http_client().set_base_url(url);
+    }
+}
+
 const char* MarketData::last_error() const {
     return m_error;
 }
@@ -60,7 +74,12 @@ const char* MarketData::last_error() const {
 bool MarketData::has_symbol(const char* symbol) const {
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
-    // Check if any data files exist for this symbol
+    // For API mode, assume any symbol might be valid (API will error if not)
+    if (m_source_mode == SOURCE_IQFEED) {
+        return true;
+    }
+
+    // For file mode, check if data files exist
     char filepath[512];
     std::snprintf(filepath, sizeof(filepath), "%s/candles_%s_daily.csv",
                  m_data_dir.c_str(), symbol);
@@ -79,6 +98,12 @@ bool MarketData::load_symbol(const char* symbol) {
         return false;
     }
 
+    // Use API if configured
+    if (m_source_mode == SOURCE_IQFEED) {
+        return load_symbol_from_api(symbol);
+    }
+
+    // File-based loading (original behavior)
     std::string sym(symbol);
     SymbolData& data = m_symbols[sym];
     data.loaded = false;
@@ -459,6 +484,173 @@ bool MarketData::parse_candles_csv(const char* filepath, std::vector<Candle>& ca
     if (candles.size() > MAX_CANDLES) {
         candles.erase(candles.begin(), candles.begin() + static_cast<long>(candles.size() - MAX_CANDLES));
     }
+
+    return !candles.empty();
+}
+
+// ============================================================================
+// API-based loading (iqfeed HTTP API)
+// ============================================================================
+
+bool MarketData::load_symbol_from_api(const char* symbol) {
+    std::string sym(symbol);
+    SymbolData& data = m_symbols[sym];
+    data.loaded = false;
+    data.level2_bids.clear();
+    data.level2_asks.clear();
+    data.time_sales.clear();
+    data.candles_1m.clear();
+    data.candles_5m.clear();
+    data.candles_daily.clear();
+
+    bool any_loaded = false;
+
+    // Fetch daily candles
+    if (fetch_daily_candles(symbol, data.candles_daily)) {
+        any_loaded = true;
+    }
+
+    // Fetch 1-minute candles (interval=60 seconds)
+    if (fetch_minute_candles(symbol, 60, data.candles_1m)) {
+        any_loaded = true;
+    }
+
+    // Fetch 5-minute candles (interval=300 seconds)
+    if (fetch_minute_candles(symbol, 300, data.candles_5m)) {
+        any_loaded = true;
+    }
+
+    if (!any_loaded) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to fetch data for %s from API", symbol);
+        return false;
+    }
+
+    // Set current price from most recent candle
+    if (!data.candles_1m.empty()) {
+        data.current_price = data.candles_1m.back().close;
+    } else if (!data.candles_daily.empty()) {
+        data.current_price = data.candles_daily.back().close;
+    }
+
+    data.loaded = true;
+    return true;
+}
+
+bool MarketData::fetch_daily_candles(const char* symbol, std::vector<Candle>& candles) {
+    candles.clear();
+
+    // Build URL: /ohlc?asset=SYMBOL&range=DAILY&datapoints=200
+    char path[256];
+    std::snprintf(path, sizeof(path), "/ohlc?asset=%s&range=DAILY&datapoints=%d",
+                 symbol, MAX_CANDLES);
+
+    HttpClient& client = get_http_client();
+    HttpResponse resp = client.get(path);
+
+    if (!resp.success) {
+        std::snprintf(m_error, sizeof(m_error), "API error fetching daily candles: %s",
+                     resp.error.c_str());
+        return false;
+    }
+
+    // Parse JSON response
+    if (!parse_iqfeed_ohlc_json(resp.body, candles)) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to parse daily candles JSON");
+        return false;
+    }
+
+    return !candles.empty();
+}
+
+bool MarketData::fetch_minute_candles(const char* symbol, int interval_secs, std::vector<Candle>& candles) {
+    candles.clear();
+
+    // Build URL: /ohlc-intervals?asset=SYMBOL&interval=60&datapoints=200
+    char path[256];
+    std::snprintf(path, sizeof(path), "/ohlc-intervals?asset=%s&interval=%d&datapoints=%d",
+                 symbol, interval_secs, MAX_CANDLES);
+
+    HttpClient& client = get_http_client();
+    HttpResponse resp = client.get(path);
+
+    if (!resp.success) {
+        std::snprintf(m_error, sizeof(m_error), "API error fetching %d-sec candles: %s",
+                     interval_secs, resp.error.c_str());
+        return false;
+    }
+
+    // The interval endpoint returns JSON in the same format
+    if (!parse_iqfeed_ohlc_json(resp.body, candles)) {
+        // Try CSV format (when using Accept: text/csv header)
+        if (!parse_csv_response(resp.body, candles)) {
+            std::snprintf(m_error, sizeof(m_error), "Failed to parse %d-sec candles",
+                         interval_secs);
+            return false;
+        }
+    }
+
+    // Limit to MAX_CANDLES
+    if (candles.size() > MAX_CANDLES) {
+        candles.erase(candles.begin(), candles.begin() + static_cast<long>(candles.size() - MAX_CANDLES));
+    }
+
+    return !candles.empty();
+}
+
+bool MarketData::parse_csv_response(const std::string& csv, std::vector<Candle>& candles) {
+    candles.clear();
+
+    if (csv.empty()) return false;
+
+    // Parse CSV format from iqfeed:
+    // MessageID, TimeStamp, High, Low, Open, Close, TotalVolume, PeriodVolume, NumberofTrades,
+    // LH,2024-05-10 05:32:00,184.7600,184.7500,184.7500,184.7600,32048,250,0,
+
+    const char* p = csv.c_str();
+    const char* end = p + csv.size();
+
+    // Process line by line
+    while (p < end) {
+        // Find end of line
+        const char* line_end = p;
+        while (line_end < end && *line_end != '\n' && *line_end != '\r') {
+            line_end++;
+        }
+
+        // Parse this line
+        if (line_end > p) {
+            char msg_id[8] = "";
+            char ts[32] = "";
+            float high = 0, low = 0, open = 0, close = 0;
+            float total_vol = 0;
+
+            // Format: MessageID,TimeStamp,High,Low,Open,Close,TotalVolume,...
+            int parsed = std::sscanf(p, "%7[^,],%31[^,],%f,%f,%f,%f,%f",
+                                    msg_id, ts, &high, &low, &open, &close, &total_vol);
+
+            // Skip header line
+            if (parsed >= 6 && std::strcmp(msg_id, "Message") != 0 &&
+                std::strcmp(msg_id, "LH") == 0) {
+                Candle c;
+                safe_strcpy(c.timestamp, ts, sizeof(c.timestamp));
+                c.open = open;
+                c.high = high;
+                c.low = low;
+                c.close = close;
+                c.volume = total_vol;
+                candles.push_back(c);
+            }
+        }
+
+        // Move to next line
+        p = line_end;
+        while (p < end && (*p == '\n' || *p == '\r')) {
+            p++;
+        }
+    }
+
+    // Reverse to get chronological order (API returns newest first)
+    std::reverse(candles.begin(), candles.end());
 
     return !candles.empty();
 }
