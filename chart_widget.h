@@ -72,7 +72,7 @@ private:
     int m_dragging_trendline;
     int m_dragging_trendline_point;
     bool m_trendline_drawing;
-    int m_trendline_start_candle;
+    float m_trendline_start_candle;  // Float for exact positioning
     float m_trendline_start_price;
 
     // Calculated indicators

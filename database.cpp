@@ -127,8 +127,8 @@ bool Database::create_tables() {
         CREATE TABLE IF NOT EXISTS trendlines (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol TEXT NOT NULL,
-            candle_start INTEGER NOT NULL,
-            candle_end INTEGER NOT NULL,
+            candle_start REAL NOT NULL,
+            candle_end REAL NOT NULL,
             price_start REAL NOT NULL,
             price_end REAL NOT NULL,
             color INTEGER NOT NULL,
@@ -629,8 +629,8 @@ bool Database::save_trendlines(const char* symbol, const std::vector<TrendLine>&
     for (const auto& line : lines) {
         sqlite3_reset(stmt);
         sqlite3_bind_text(stmt, 1, symbol, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 2, line.candle_start);
-        sqlite3_bind_int(stmt, 3, line.candle_end);
+        sqlite3_bind_double(stmt, 2, static_cast<double>(line.candle_start));
+        sqlite3_bind_double(stmt, 3, static_cast<double>(line.candle_end));
         sqlite3_bind_double(stmt, 4, static_cast<double>(line.price_start));
         sqlite3_bind_double(stmt, 5, static_cast<double>(line.price_end));
         sqlite3_bind_int(stmt, 6, static_cast<int>(line.color));
@@ -664,8 +664,8 @@ bool Database::load_trendlines(const char* symbol, std::vector<TrendLine>& lines
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         TrendLine line;
-        line.candle_start = sqlite3_column_int(stmt, 0);
-        line.candle_end = sqlite3_column_int(stmt, 1);
+        line.candle_start = static_cast<float>(sqlite3_column_double(stmt, 0));
+        line.candle_end = static_cast<float>(sqlite3_column_double(stmt, 1));
         line.price_start = static_cast<float>(sqlite3_column_double(stmt, 2));
         line.price_end = static_cast<float>(sqlite3_column_double(stmt, 3));
         line.color = static_cast<ImU32>(sqlite3_column_int(stmt, 4));

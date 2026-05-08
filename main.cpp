@@ -102,8 +102,8 @@ static void process_hotkeys() {
         }
     }
 
-    // Check for Ctrl+number keys (sell orders)
-    if (ImGui::GetIO().KeyCtrl) {
+    // Check for Ctrl+number keys (sell orders) - also support Command on macOS
+    if (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) {
         if (ImGui::IsKeyPressed(ImGuiKey_1)) {
             int qty = g_order_manager.calculate_sell_quantity(symbol, 25);
             if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f);
@@ -192,8 +192,9 @@ static void load_session() {
             g_ticker_widgets[i].set_symbol(symbols[i]);
             safe_strcpy(g_symbol_states[i].symbol, symbols[i], sizeof(g_symbol_states[i].symbol));
 
-            // Load drawings and indicators for each symbol
+            // Load market data and drawings for each symbol
             if (symbols[i][0] != '\0') {
+                g_market_data.load_symbol(symbols[i]);
                 g_database.load_hlines(symbols[i], g_symbol_states[i].hlines);
                 g_database.load_trendlines(symbols[i], g_symbol_states[i].trendlines);
                 g_database.load_indicator_settings(symbols[i], g_symbol_states[i].indicators);
@@ -336,6 +337,136 @@ int main(int argc, char** argv) {
         float text_width = ImGui::CalcTextSize(time_str).x;
         ImGui::SetCursorPosX((window_width - text_width) / 2.0f);
         ImGui::Text("%s", time_str);
+
+        ImGui::Separator();
+
+        // Toolbar for drawing tools and indicators
+        SymbolState* current_state = nullptr;
+        if (g_selected_ticker >= 0 && g_selected_ticker < NUM_TICKERS) {
+            current_state = &g_symbol_states[g_selected_ticker];
+        }
+
+        // Drawing tools section
+        ImGui::Text("Draw:");
+        ImGui::SameLine();
+
+        if (ImGui::RadioButton("None", g_draw_mode == CHART_DRAW_NONE)) {
+            g_draw_mode = CHART_DRAW_NONE;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("HLine", g_draw_mode == CHART_DRAW_HLINE)) {
+            g_draw_mode = CHART_DRAW_HLINE;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Trend", g_draw_mode == CHART_DRAW_TRENDLINE)) {
+            g_draw_mode = CHART_DRAW_TRENDLINE;
+        }
+
+        ImGui::SameLine();
+        ImGui::Text("  |  Color:");
+        ImGui::SameLine();
+
+        // Color buttons
+        const char* color_names[] = {"Yellow", "Red", "Green", "Blue", "White", "Purple"};
+        for (int i = 0; i < g_num_chart_colors; ++i) {
+            ImGui::PushID(i + 100);
+            ImVec4 col = ImGui::ColorConvertU32ToFloat4(g_chart_colors[i]);
+            if (g_current_color_idx == i) {
+                ImGui::PushStyleColor(ImGuiCol_Button, col);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, col);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
+            } else {
+                ImVec4 dim = ImVec4(col.x * 0.5f, col.y * 0.5f, col.z * 0.5f, col.w);
+                ImGui::PushStyleColor(ImGuiCol_Button, dim);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, col);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, col);
+            }
+            if (ImGui::SmallButton(color_names[i])) {
+                g_current_color_idx = i;
+            }
+            ImGui::PopStyleColor(3);
+            ImGui::PopID();
+            if (i < g_num_chart_colors - 1) ImGui::SameLine();
+        }
+
+        ImGui::SameLine();
+        ImGui::Text("  |  Style:");
+        ImGui::SameLine();
+
+        if (ImGui::RadioButton("Solid", g_current_style == STYLE_SOLID)) {
+            g_current_style = STYLE_SOLID;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Dashed", g_current_style == STYLE_DASHED)) {
+            g_current_style = STYLE_DASHED;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Dotted", g_current_style == STYLE_DOTTED)) {
+            g_current_style = STYLE_DOTTED;
+        }
+
+        // Clear lines button
+        ImGui::SameLine();
+        ImGui::Text("  |");
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, make_color(150, 50, 50, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, make_color(200, 50, 50, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, make_color(255, 50, 50, 255));
+        if (ImGui::SmallButton("Clear Lines") && current_state != nullptr) {
+            current_state->hlines.clear();
+            current_state->trendlines.clear();
+        }
+        ImGui::PopStyleColor(3);
+
+        // Indicators section (new line)
+        ImGui::Text("Indicators:");
+        ImGui::SameLine();
+
+        if (current_state != nullptr) {
+            // SMA
+            bool sma_changed = ImGui::Checkbox("SMA", &current_state->indicators.sma_enabled);
+            ImGui::SameLine();
+            ImGui::PushItemWidth(50);
+            sma_changed |= ImGui::InputInt("##SMA_Period", &current_state->indicators.sma_period, 0, 0);
+            ImGui::PopItemWidth();
+            if (current_state->indicators.sma_period < 2) current_state->indicators.sma_period = 2;
+            if (current_state->indicators.sma_period > 200) current_state->indicators.sma_period = 200;
+
+            ImGui::SameLine();
+            ImGui::Text("  ");
+            ImGui::SameLine();
+
+            // EMA
+            bool ema_changed = ImGui::Checkbox("EMA", &current_state->indicators.ema_enabled);
+            ImGui::SameLine();
+            ImGui::PushItemWidth(50);
+            ema_changed |= ImGui::InputInt("##EMA_Period", &current_state->indicators.ema_period, 0, 0);
+            ImGui::PopItemWidth();
+            if (current_state->indicators.ema_period < 2) current_state->indicators.ema_period = 2;
+            if (current_state->indicators.ema_period > 200) current_state->indicators.ema_period = 200;
+
+            ImGui::SameLine();
+            ImGui::Text("  ");
+            ImGui::SameLine();
+
+            // Bollinger Bands
+            bool boll_changed = ImGui::Checkbox("Bollinger", &current_state->indicators.boll_enabled);
+            ImGui::SameLine();
+            ImGui::PushItemWidth(50);
+            boll_changed |= ImGui::InputInt("##Boll_Period", &current_state->indicators.boll_period, 0, 0);
+            ImGui::PopItemWidth();
+            if (current_state->indicators.boll_period < 2) current_state->indicators.boll_period = 2;
+            if (current_state->indicators.boll_period > 200) current_state->indicators.boll_period = 200;
+
+            // Recalculate indicators if changed
+            if (sma_changed || ema_changed || boll_changed) {
+                g_chart_1m.recalculate_indicators();
+                g_chart_5m.recalculate_indicators();
+                g_chart_daily.recalculate_indicators();
+            }
+        } else {
+            ImGui::TextDisabled("(Select a ticker first)");
+        }
 
         ImGui::Separator();
 

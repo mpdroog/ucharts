@@ -149,6 +149,10 @@ bool TickerWidget::render(ImVec2 size) {
                                  ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
                 // Enter pressed - validate and accept
                 if (validate_symbol(m_symbol_input)) {
+                    // Load the symbol data
+                    if (m_market != nullptr) {
+                        m_market->load_symbol(m_symbol_input);
+                    }
                     safe_strcpy(m_symbol, m_symbol_input, sizeof(m_symbol));
                     m_error_msg[0] = '\0';
                     m_editing_symbol = false;

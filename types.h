@@ -185,8 +185,8 @@ struct HLine {
 
 // Trend line
 struct TrendLine {
-    int candle_start;
-    int candle_end;
+    float candle_start;  // Float for exact positioning between candles
+    float candle_end;
     float price_start;
     float price_end;
     ImU32 color;

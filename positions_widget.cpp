@@ -30,14 +30,15 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
     if (ImGui::BeginChild("OpenPositions", ImVec2(size.x, size.y * 0.6f), false)) {
         // Column headers
         ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
-        float col_width = size.x / 6.0f;
-        ImGui::Columns(6, "OpenPosHeader", false);
+        float col_width = size.x / 7.0f;
+        ImGui::Columns(7, "OpenPosHeader", false);
         ImGui::SetColumnWidth(0, col_width);
-        ImGui::SetColumnWidth(1, col_width * 0.8f);
-        ImGui::SetColumnWidth(2, col_width);
-        ImGui::SetColumnWidth(3, col_width);
+        ImGui::SetColumnWidth(1, col_width * 0.7f);
+        ImGui::SetColumnWidth(2, col_width * 0.9f);
+        ImGui::SetColumnWidth(3, col_width * 0.9f);
         ImGui::SetColumnWidth(4, col_width);
-        ImGui::SetColumnWidth(5, col_width);
+        ImGui::SetColumnWidth(5, col_width * 0.9f);
+        ImGui::SetColumnWidth(6, col_width * 0.6f);
 
         ImGui::Text("Symbol");
         ImGui::NextColumn();
@@ -51,6 +52,8 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
         ImGui::NextColumn();
         ImGui::Text("P&L%%");
         ImGui::NextColumn();
+        ImGui::Text("");  // Close column
+        ImGui::NextColumn();
         ImGui::PopStyleColor();
 
         ImGui::Separator();
@@ -58,6 +61,9 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
         // Position rows
         if (m_order_mgr != nullptr) {
             const std::vector<Position>& positions = m_order_mgr->get_open_positions();
+            char close_symbol[MAX_SYMBOL_LEN];
+            close_symbol[0] = '\0';
+
             for (const auto& pos : positions) {
                 // Calculate P&L
                 float cost_basis = pos.avg_price * static_cast<float>(pos.quantity);
@@ -75,6 +81,29 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
                 ImGui::NextColumn();
                 render_pnl(pnl, pnl_percent);
                 ImGui::NextColumn();
+
+                // Close button
+                ImGui::PushID(pos.symbol);
+                ImGui::PushStyleColor(ImGuiCol_Button, make_color(150, 0, 0, 255));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, make_color(200, 0, 0, 255));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, make_color(255, 0, 0, 255));
+
+                if (ImGui::SmallButton("X")) {
+                    safe_strcpy(close_symbol, pos.symbol, sizeof(close_symbol));
+                }
+
+                ImGui::PopStyleColor(3);
+                ImGui::PopID();
+                ImGui::NextColumn();
+            }
+
+            // Process close after iteration
+            if (close_symbol[0] != '\0') {
+                // Sell entire position at market (current price - small offset)
+                const Position* p = m_order_mgr->find_position(close_symbol);
+                if (p != nullptr) {
+                    m_order_mgr->sell(close_symbol, p->quantity, p->current_price - 0.05f);
+                }
             }
         }
 

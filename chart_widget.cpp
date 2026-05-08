@@ -9,7 +9,7 @@ ChartWidget::ChartWidget()
       m_draw_mode(CHART_DRAW_NONE), m_draw_color(g_chart_colors[0]), m_draw_style(STYLE_SOLID),
       m_hovered_candle(-1), m_is_panning(false), m_pan_start_x(0), m_pan_start_pan(0),
       m_dragging_hline(-1), m_dragging_trendline(-1), m_dragging_trendline_point(-1),
-      m_trendline_drawing(false), m_trendline_start_candle(-1), m_trendline_start_price(0) {
+      m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0) {
 }
 
 void ChartWidget::set_candles(const std::vector<Candle>& candles) {
@@ -47,7 +47,7 @@ void ChartWidget::set_draw_mode(ChartDrawMode mode) {
     m_draw_mode = mode;
     if (mode != CHART_DRAW_TRENDLINE) {
         m_trendline_drawing = false;
-        m_trendline_start_candle = -1;
+        m_trendline_start_candle = -1.0f;
     }
 }
 
@@ -530,9 +530,9 @@ bool ChartWidget::render(ImVec2 size) {
     if (m_trendlines) {
         for (size_t i = 0; i < m_trendlines->size(); i++) {
             TrendLine& tl = (*m_trendlines)[i];
-            float x1 = candleToX(static_cast<float>(tl.candle_start));
+            float x1 = candleToX(tl.candle_start);
             float y1 = priceToY(tl.price_start);
-            float x2 = candleToX(static_cast<float>(tl.candle_end));
+            float x2 = candleToX(tl.candle_end);
             float y2 = priceToY(tl.price_end);
 
             float thickness = tl.selected ? 3.0f : 2.0f;
@@ -562,15 +562,16 @@ bool ChartWidget::render(ImVec2 size) {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 TrendLine& tl = (*m_trendlines)[static_cast<size_t>(m_dragging_trendline)];
                 float candle_f = xToCandle(io.MousePos.x);
-                int candle_idx = static_cast<int>(std::round(candle_f));
-                candle_idx = std::max(0, std::min(candle_idx, static_cast<int>(m_candles.size()) - 1));
+                // Keep exact position for dragging
+                float max_candle = static_cast<float>(m_candles.size()) - 1.0f;
+                candle_f = std::max(0.0f, std::min(candle_f, max_candle));
                 float price = yToPrice(io.MousePos.y);
 
                 if (m_dragging_trendline_point == 0) {
-                    tl.candle_start = candle_idx;
+                    tl.candle_start = candle_f;
                     tl.price_start = price;
                 } else {
-                    tl.candle_end = candle_idx;
+                    tl.candle_end = candle_f;
                     tl.price_end = price;
                 }
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -581,8 +582,8 @@ bool ChartWidget::render(ImVec2 size) {
     }
 
     // Draw trend line preview
-    if (m_trendline_drawing && m_trendline_start_candle >= 0) {
-        float x1 = candleToX(static_cast<float>(m_trendline_start_candle));
+    if (m_trendline_drawing && m_trendline_start_candle >= 0.0f) {
+        float x1 = candleToX(m_trendline_start_candle);
         float y1 = priceToY(m_trendline_start_price);
         draw_styled_line(draw_list, ImVec2(x1, y1), io.MousePos, m_draw_color, 2.0f, m_draw_style);
     }
@@ -599,17 +600,18 @@ bool ChartWidget::render(ImVec2 size) {
     if (m_draw_mode == CHART_DRAW_TRENDLINE && is_hovered && m_trendlines) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             float candle_f = xToCandle(io.MousePos.x);
-            int candle_idx = static_cast<int>(std::round(candle_f));
-            candle_idx = std::max(0, std::min(candle_idx, static_cast<int>(m_candles.size()) - 1));
+            // Clamp to valid range but keep as float for exact positioning
+            float max_candle = static_cast<float>(m_candles.size()) - 1.0f;
+            candle_f = std::max(0.0f, std::min(candle_f, max_candle));
 
             if (!m_trendline_drawing) {
                 m_trendline_drawing = true;
-                m_trendline_start_candle = candle_idx;
+                m_trendline_start_candle = candle_f;
                 m_trendline_start_price = yToPrice(io.MousePos.y);
             } else {
                 TrendLine tl;
                 tl.candle_start = m_trendline_start_candle;
-                tl.candle_end = candle_idx;
+                tl.candle_end = candle_f;
                 tl.price_start = m_trendline_start_price;
                 tl.price_end = yToPrice(io.MousePos.y);
                 tl.color = m_draw_color;
@@ -617,7 +619,7 @@ bool ChartWidget::render(ImVec2 size) {
                 tl.selected = false;
                 m_trendlines->push_back(tl);
                 m_trendline_drawing = false;
-                m_trendline_start_candle = -1;
+                m_trendline_start_candle = -1.0f;
             }
         }
     }
@@ -626,7 +628,7 @@ bool ChartWidget::render(ImVec2 size) {
     if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         if (m_trendline_drawing) {
             m_trendline_drawing = false;
-            m_trendline_start_candle = -1;
+            m_trendline_start_candle = -1.0f;
         } else {
             if (m_hlines) for (auto& h : *m_hlines) h.selected = false;
             if (m_trendlines) for (auto& t : *m_trendlines) t.selected = false;
