@@ -575,10 +575,13 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
-    // Draw trend lines
+    // Draw trend lines (only on their source timeframe)
     if (m_trendlines) {
         for (size_t i = 0; i < m_trendlines->size(); i++) {
             TrendLine& tl = (*m_trendlines)[i];
+            // Only show trendlines on the timeframe where they were drawn
+            if (tl.source_tf != m_timeframe) continue;
+
             float x1 = candleToX(tl.candle_start);
             float y1 = priceToY(tl.price_start);
             float x2 = candleToX(tl.candle_end);
