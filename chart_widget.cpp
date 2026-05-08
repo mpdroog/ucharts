@@ -5,8 +5,10 @@
 #include <algorithm>
 
 ChartWidget::ChartWidget()
-    : m_hlines(nullptr), m_trendlines(nullptr), m_settings(nullptr), m_view(nullptr),
+    : m_current_price(0),
+      m_hlines(nullptr), m_trendlines(nullptr), m_settings(nullptr), m_view(nullptr),
       m_draw_mode(CHART_DRAW_NONE), m_draw_color(g_chart_colors[0]), m_draw_style(STYLE_SOLID),
+      m_timeframe(TF_DAILY),
       m_hovered_candle(-1), m_is_panning(false), m_pan_start_x(0), m_pan_start_pan(0),
       m_dragging_hline(-1), m_dragging_trendline(-1), m_dragging_trendline_point(-1),
       m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0) {
@@ -19,6 +21,10 @@ void ChartWidget::set_candles(const std::vector<Candle>& candles) {
 
 void ChartWidget::set_title(const char* title) {
     m_title = title ? title : "";
+}
+
+void ChartWidget::set_current_price(float price) {
+    m_current_price = price;
 }
 
 void ChartWidget::set_drawings(std::vector<HLine>* hlines, std::vector<TrendLine>* trendlines) {
@@ -57,6 +63,26 @@ void ChartWidget::set_draw_color(ImU32 color) {
 
 void ChartWidget::set_draw_style(LineStyle style) {
     m_draw_style = style;
+}
+
+void ChartWidget::set_timeframe(Timeframe tf) {
+    m_timeframe = tf;
+}
+
+// Calculate thickness multiplier based on source timeframe vs current timeframe
+// Daily lines are 2x thicker on 5min/1min
+// 5min lines are 1.5x thicker on 1min
+static float get_thickness_multiplier(Timeframe source_tf, Timeframe current_tf) {
+    if (source_tf == TF_DAILY) {
+        if (current_tf == TF_5MIN || current_tf == TF_1MIN) {
+            return 2.0f;  // Daily lines are 2x thicker on lower timeframes
+        }
+    } else if (source_tf == TF_5MIN) {
+        if (current_tf == TF_1MIN) {
+            return 1.5f;  // 5min lines are 1.5x thicker on 1min
+        }
+    }
+    return 1.0f;  // Same timeframe or lower to higher - normal thickness
 }
 
 int ChartWidget::get_hovered_candle() const {
@@ -290,6 +316,12 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
+    // Include current price in range so the price line is always visible
+    if (m_current_price > 0.0f) {
+        if (m_current_price < min_price) min_price = m_current_price;
+        if (m_current_price > max_price) max_price = m_current_price;
+    }
+
     // Add padding to price range
     float price_range = max_price - min_price;
     if (price_range < 0.01f) price_range = 0.01f;
@@ -467,23 +499,35 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
-    // Draw current price line
-    float last_close = m_candles.back().close;
-    float last_y = priceToY(last_close);
-    if (last_y >= chart_pos.y + padding_top && last_y <= chart_pos.y + main_chart_height - padding_top) {
-        draw_dashed_line(draw_list,
-            ImVec2(chart_pos.x + padding_left, last_y),
-            ImVec2(chart_pos.x + canvas_size.x - padding_right, last_y),
-            make_color(50, 150, 255), 1.0f, 4.0f);
+    // Draw current price line (use m_current_price if set, otherwise fall back to last candle)
+    float current_price = (m_current_price > 0.0f) ? m_current_price : m_candles.back().close;
+    float price_y = priceToY(current_price);
 
-        char price_label[32];
-        std::snprintf(price_label, sizeof(price_label), "%.2f", static_cast<double>(last_close));
-        draw_list->AddRectFilled(
-            ImVec2(chart_pos.x + canvas_size.x - padding_right + 2, last_y - 8),
-            ImVec2(chart_pos.x + canvas_size.x - 2, last_y + 8),
-            make_color(50, 150, 255));
-        draw_list->AddText(ImVec2(chart_pos.x + canvas_size.x - padding_right + 5, last_y - 6), make_color(255, 255, 255), price_label);
+    // Clamp Y position to chart bounds for the label
+    float label_y = price_y;
+    float min_y = chart_pos.y + padding_top;
+    float max_y = chart_pos.y + main_chart_height - padding_top;
+    bool price_in_range = (price_y >= min_y && price_y <= max_y);
+
+    if (price_in_range) {
+        // Draw price line if in visible range
+        draw_dashed_line(draw_list,
+            ImVec2(chart_pos.x + padding_left, price_y),
+            ImVec2(chart_pos.x + canvas_size.x - padding_right, price_y),
+            make_color(50, 150, 255), 1.0f, 4.0f);
+    } else {
+        // Clamp label position to edge of chart
+        label_y = (price_y < min_y) ? min_y : max_y;
     }
+
+    // Always draw the price label box
+    char price_label[32];
+    std::snprintf(price_label, sizeof(price_label), "%.2f", static_cast<double>(current_price));
+    draw_list->AddRectFilled(
+        ImVec2(chart_pos.x + canvas_size.x - padding_right + 2, label_y - 8),
+        ImVec2(chart_pos.x + canvas_size.x - 2, label_y + 8),
+        make_color(50, 150, 255));
+    draw_list->AddText(ImVec2(chart_pos.x + canvas_size.x - padding_right + 5, label_y - 6), make_color(255, 255, 255), price_label);
 
     // Draw horizontal lines
     if (m_hlines) {
@@ -491,7 +535,8 @@ bool ChartWidget::render(ImVec2 size) {
             HLine& hl = (*m_hlines)[i];
             float y = priceToY(hl.price);
             if (y >= chart_pos.y + padding_top && y <= chart_pos.y + main_chart_height - padding_top) {
-                float thickness = hl.selected ? 3.0f : 2.0f;
+                float base_thickness = hl.selected ? 3.0f : 2.0f;
+                float thickness = base_thickness * get_thickness_multiplier(hl.source_tf, m_timeframe);
                 draw_styled_line(draw_list,
                     ImVec2(chart_pos.x + padding_left, y),
                     ImVec2(chart_pos.x + canvas_size.x - padding_right, y),
@@ -535,7 +580,8 @@ bool ChartWidget::render(ImVec2 size) {
             float x2 = candleToX(tl.candle_end);
             float y2 = priceToY(tl.price_end);
 
-            float thickness = tl.selected ? 3.0f : 2.0f;
+            float base_thickness = tl.selected ? 3.0f : 2.0f;
+            float thickness = base_thickness * get_thickness_multiplier(tl.source_tf, m_timeframe);
             draw_styled_line(draw_list, ImVec2(x1, y1), ImVec2(x2, y2), tl.color, thickness, tl.style);
 
             if (tl.selected) {
@@ -592,7 +638,7 @@ bool ChartWidget::render(ImVec2 size) {
     if (m_draw_mode == CHART_DRAW_HLINE && is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && m_hlines) {
         float click_y = io.MousePos.y;
         if (click_y >= chart_pos.y + padding_top && click_y <= chart_pos.y + main_chart_height - padding_top) {
-            HLine new_line(yToPrice(click_y), m_draw_color, m_draw_style);
+            HLine new_line(yToPrice(click_y), m_draw_color, m_draw_style, m_timeframe);
             m_hlines->push_back(new_line);
         }
     }
@@ -616,6 +662,7 @@ bool ChartWidget::render(ImVec2 size) {
                 tl.price_end = yToPrice(io.MousePos.y);
                 tl.color = m_draw_color;
                 tl.style = m_draw_style;
+                tl.source_tf = m_timeframe;
                 tl.selected = false;
                 m_trendlines->push_back(tl);
                 m_trendline_drawing = false;

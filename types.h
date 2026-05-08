@@ -177,10 +177,12 @@ struct HLine {
     float price;
     ImU32 color;
     LineStyle style;
+    Timeframe source_tf;  // Timeframe where line was drawn
     bool selected;
 
-    HLine() : price(0), color(0), style(STYLE_SOLID), selected(false) {}
-    HLine(float p, ImU32 c, LineStyle s) : price(p), color(c), style(s), selected(false) {}
+    HLine() : price(0), color(0), style(STYLE_SOLID), source_tf(TF_DAILY), selected(false) {}
+    HLine(float p, ImU32 c, LineStyle s, Timeframe tf = TF_DAILY)
+        : price(p), color(c), style(s), source_tf(tf), selected(false) {}
 };
 
 // Trend line
@@ -191,10 +193,11 @@ struct TrendLine {
     float price_end;
     ImU32 color;
     LineStyle style;
+    Timeframe source_tf;  // Timeframe where line was drawn
     bool selected;
 
     TrendLine() : candle_start(0), candle_end(0), price_start(0), price_end(0),
-                  color(0), style(STYLE_SOLID), selected(false) {}
+                  color(0), style(STYLE_SOLID), source_tf(TF_DAILY), selected(false) {}
 };
 
 // Indicator settings

@@ -118,7 +118,8 @@ bool Database::create_tables() {
             symbol TEXT NOT NULL,
             price REAL NOT NULL,
             color INTEGER NOT NULL,
-            style INTEGER NOT NULL
+            style INTEGER NOT NULL,
+            source_tf INTEGER NOT NULL DEFAULT 2
         )
     )";
 
@@ -132,7 +133,8 @@ bool Database::create_tables() {
             price_start REAL NOT NULL,
             price_end REAL NOT NULL,
             color INTEGER NOT NULL,
-            style INTEGER NOT NULL
+            style INTEGER NOT NULL,
+            source_tf INTEGER NOT NULL DEFAULT 2
         )
     )";
 
@@ -548,7 +550,7 @@ bool Database::save_hlines(const char* symbol, const std::vector<HLine>& lines) 
     if (lines.empty()) return true;
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "INSERT INTO hlines (symbol, price, color, style) VALUES (?, ?, ?, ?)";
+    const char* sql = "INSERT INTO hlines (symbol, price, color, style, source_tf) VALUES (?, ?, ?, ?, ?)";
 
     if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), sql, -1, &stmt, nullptr) != SQLITE_OK) {
         std::snprintf(m_error, sizeof(m_error), "Prepare failed: %s",
@@ -563,6 +565,7 @@ bool Database::save_hlines(const char* symbol, const std::vector<HLine>& lines) 
         sqlite3_bind_double(stmt, 2, static_cast<double>(line.price));
         sqlite3_bind_int(stmt, 3, static_cast<int>(line.color));
         sqlite3_bind_int(stmt, 4, static_cast<int>(line.style));
+        sqlite3_bind_int(stmt, 5, static_cast<int>(line.source_tf));
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             success = false;
@@ -580,7 +583,7 @@ bool Database::load_hlines(const char* symbol, std::vector<HLine>& lines) {
     lines.clear();
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT price, color, style FROM hlines WHERE symbol = ?";
+    const char* sql = "SELECT price, color, style, source_tf FROM hlines WHERE symbol = ?";
 
     if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), sql, -1, &stmt, nullptr) != SQLITE_OK) {
         std::snprintf(m_error, sizeof(m_error), "Prepare failed: %s",
@@ -595,6 +598,7 @@ bool Database::load_hlines(const char* symbol, std::vector<HLine>& lines) {
         line.price = static_cast<float>(sqlite3_column_double(stmt, 0));
         line.color = static_cast<ImU32>(sqlite3_column_int(stmt, 1));
         line.style = static_cast<LineStyle>(sqlite3_column_int(stmt, 2));
+        line.source_tf = static_cast<Timeframe>(sqlite3_column_int(stmt, 3));
         line.selected = false;
         lines.push_back(line);
     }
@@ -616,8 +620,8 @@ bool Database::save_trendlines(const char* symbol, const std::vector<TrendLine>&
     if (lines.empty()) return true;
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "INSERT INTO trendlines (symbol, candle_start, candle_end, price_start, price_end, color, style) "
-                      "VALUES (?, ?, ?, ?, ?, ?, ?)";
+    const char* sql = "INSERT INTO trendlines (symbol, candle_start, candle_end, price_start, price_end, color, style, source_tf) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
     if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), sql, -1, &stmt, nullptr) != SQLITE_OK) {
         std::snprintf(m_error, sizeof(m_error), "Prepare failed: %s",
@@ -635,6 +639,7 @@ bool Database::save_trendlines(const char* symbol, const std::vector<TrendLine>&
         sqlite3_bind_double(stmt, 5, static_cast<double>(line.price_end));
         sqlite3_bind_int(stmt, 6, static_cast<int>(line.color));
         sqlite3_bind_int(stmt, 7, static_cast<int>(line.style));
+        sqlite3_bind_int(stmt, 8, static_cast<int>(line.source_tf));
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             success = false;
@@ -652,7 +657,7 @@ bool Database::load_trendlines(const char* symbol, std::vector<TrendLine>& lines
     lines.clear();
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT candle_start, candle_end, price_start, price_end, color, style FROM trendlines WHERE symbol = ?";
+    const char* sql = "SELECT candle_start, candle_end, price_start, price_end, color, style, source_tf FROM trendlines WHERE symbol = ?";
 
     if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), sql, -1, &stmt, nullptr) != SQLITE_OK) {
         std::snprintf(m_error, sizeof(m_error), "Prepare failed: %s",
@@ -670,6 +675,7 @@ bool Database::load_trendlines(const char* symbol, std::vector<TrendLine>& lines
         line.price_end = static_cast<float>(sqlite3_column_double(stmt, 3));
         line.color = static_cast<ImU32>(sqlite3_column_int(stmt, 4));
         line.style = static_cast<LineStyle>(sqlite3_column_int(stmt, 5));
+        line.source_tf = static_cast<Timeframe>(sqlite3_column_int(stmt, 6));
         line.selected = false;
         lines.push_back(line);
     }

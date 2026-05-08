@@ -167,6 +167,17 @@ static void update_charts_for_selected_ticker() {
     g_chart_daily.set_indicator_settings(&state.indicators);
     g_chart_daily.set_view_state(&state.view_daily);
 
+    // Set timeframes for line thickness calculation
+    g_chart_1m.set_timeframe(TF_1MIN);
+    g_chart_5m.set_timeframe(TF_5MIN);
+    g_chart_daily.set_timeframe(TF_DAILY);
+
+    // Set current price (same across all timeframes)
+    float current_price = g_market_data.get_current_price(symbol);
+    g_chart_1m.set_current_price(current_price);
+    g_chart_5m.set_current_price(current_price);
+    g_chart_daily.set_current_price(current_price);
+
     // Set drawing mode
     g_chart_1m.set_draw_mode(g_draw_mode);
     g_chart_5m.set_draw_mode(g_draw_mode);

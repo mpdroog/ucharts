@@ -22,6 +22,7 @@ public:
     // Set chart data
     void set_candles(const std::vector<Candle>& candles);
     void set_title(const char* title);
+    void set_current_price(float price);
 
     // Set drawing state (shared across charts)
     void set_drawings(std::vector<HLine>* hlines, std::vector<TrendLine>* trendlines);
@@ -38,6 +39,7 @@ public:
     void set_draw_mode(ChartDrawMode mode);
     void set_draw_color(ImU32 color);
     void set_draw_style(LineStyle style);
+    void set_timeframe(Timeframe tf);
 
     // Render the chart
     // Returns true if double-clicked (for fullscreen toggle)
@@ -52,6 +54,7 @@ public:
 private:
     std::string m_title;
     std::vector<Candle> m_candles;
+    float m_current_price;
     std::vector<HLine>* m_hlines;
     std::vector<TrendLine>* m_trendlines;
     IndicatorSettings* m_settings;
@@ -62,6 +65,7 @@ private:
     ChartDrawMode m_draw_mode;
     ImU32 m_draw_color;
     LineStyle m_draw_style;
+    Timeframe m_timeframe;
 
     // Interaction state
     int m_hovered_candle;
