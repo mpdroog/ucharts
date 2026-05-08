@@ -82,13 +82,11 @@ all: check-deps $(TARGET)
 $(TARGET): $(OBJS) $(IMGUI_OBJS)
 	$(CXX) -o $@ $^ $(LDFLAGS)
 
-%.o: %.cpp
+# Use static pattern rules to ensure correct flags are used
+$(OBJS): %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-$(IMGUI_DIR)/%.o: $(IMGUI_DIR)/%.cpp
-	$(CXX) $(IMGUI_CXXFLAGS) -c -o $@ $<
-
-$(IMGUI_DIR)/backends/%.o: $(IMGUI_DIR)/backends/%.cpp
+$(IMGUI_OBJS): %.o: %.cpp
 	$(CXX) $(IMGUI_CXXFLAGS) -c -o $@ $<
 
 # Check dependencies

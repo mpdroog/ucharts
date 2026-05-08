@@ -4,3 +4,6 @@ ucharts
 
 # Dependencies
 imgui/
+
+# ImGui settings
+imgui.ini

@@ -1,6 +1,9 @@
 // Simple Candlestick Chart Application
 // Uses Dear ImGui with GLFW + OpenGL3 backend
 
+// Silence OpenGL deprecation warnings on macOS
+#define GL_SILENCE_DEPRECATION
+
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -10,6 +13,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+// Helper to create ImGui color without C-style casts (replaces IM_COL32 macro)
+static constexpr ImU32 MakeColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a = 255) {
+    return (static_cast<ImU32>(a) << IM_COL32_A_SHIFT) |
+           (static_cast<ImU32>(b) << IM_COL32_B_SHIFT) |
+           (static_cast<ImU32>(g) << IM_COL32_G_SHIFT) |
+           (static_cast<ImU32>(r) << IM_COL32_R_SHIFT);
+}
 
 // OHLC data structure
 struct Candle {
@@ -58,11 +69,6 @@ static bool LoadCSV(const char* filename) {
 
 // Draw candlestick chart
 static void DrawCandlestickChart(ImVec2 size) {
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
-    if (window->SkipItems) {
-        return;
-    }
-
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
     ImVec2 canvas_size = size;
@@ -77,10 +83,10 @@ static void DrawCandlestickChart(ImVec2 size) {
     // Draw background
     draw_list->AddRectFilled(canvas_pos,
         ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y),
-        IM_COL32(30, 30, 30, 255));
+        MakeColor(30, 30, 30));
     draw_list->AddRect(canvas_pos,
         ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y),
-        IM_COL32(100, 100, 100, 255));
+        MakeColor(100, 100, 100));
 
     if (g_candles.empty()) {
         ImGui::Dummy(canvas_size);
@@ -125,12 +131,12 @@ static void DrawCandlestickChart(ImVec2 size) {
         draw_list->AddLine(
             ImVec2(canvas_pos.x + padding, y),
             ImVec2(canvas_pos.x + canvas_size.x - padding, y),
-            IM_COL32(60, 60, 60, 255));
+            MakeColor(60, 60, 60));
 
         // Price label
         char price_label[32];
         std::snprintf(price_label, sizeof(price_label), "%.2f", static_cast<double>(price));
-        draw_list->AddText(ImVec2(canvas_pos.x + 2.0f, y - 6.0f), IM_COL32(150, 150, 150, 255), price_label);
+        draw_list->AddText(ImVec2(canvas_pos.x + 2.0f, y - 6.0f), MakeColor(150, 150, 150), price_label);
     }
 
     // Draw candles
@@ -144,7 +150,7 @@ static void DrawCandlestickChart(ImVec2 size) {
         float low_y = priceToY(c.low);
 
         bool bullish = c.close >= c.open;
-        ImU32 color = bullish ? IM_COL32(0, 200, 100, 255) : IM_COL32(220, 60, 60, 255);
+        ImU32 color = bullish ? MakeColor(0, 200, 100) : MakeColor(220, 60, 60);
 
         // Draw wick (high-low line)
         draw_list->AddLine(
