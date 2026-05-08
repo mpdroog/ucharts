@@ -354,7 +354,8 @@ bool ChartWidget::render(ImVec2 size) {
     };
 
     auto xToCandle = [&](float x) -> float {
-        return start_candle + (x - chart_pos.x - padding_left) / candle_width;
+        // Account for candle centering (candleToX adds candle_width/2)
+        return start_candle + (x - chart_pos.x - padding_left - candle_width / 2.0f) / candle_width;
     };
 
     // Handle keyboard navigation
@@ -710,6 +711,60 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
+    // Right-click context menu
+    char popup_id[64];
+    std::snprintf(popup_id, sizeof(popup_id), "chart_context_%p", static_cast<void*>(this));
+    if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        ImGui::OpenPopup(popup_id);
+    }
+    if (ImGui::BeginPopup(popup_id)) {
+        // Check if any line is selected
+        bool has_selected = false;
+        if (m_hlines) {
+            for (const auto& h : *m_hlines) {
+                if (h.selected) { has_selected = true; break; }
+            }
+        }
+        if (!has_selected && m_trendlines) {
+            for (const auto& t : *m_trendlines) {
+                if (t.selected) { has_selected = true; break; }
+            }
+        }
+
+        if (has_selected) {
+            if (ImGui::MenuItem("Delete Selected")) {
+                if (m_hlines) {
+                    m_hlines->erase(std::remove_if(m_hlines->begin(), m_hlines->end(),
+                        [](const HLine& h) { return h.selected; }), m_hlines->end());
+                }
+                if (m_trendlines) {
+                    m_trendlines->erase(std::remove_if(m_trendlines->begin(), m_trendlines->end(),
+                        [](const TrendLine& t) { return t.selected; }), m_trendlines->end());
+                }
+            }
+        }
+
+        if (ImGui::MenuItem("Clear Lines (This Timeframe)")) {
+            // Only clear lines drawn on this timeframe
+            if (m_hlines) {
+                m_hlines->erase(std::remove_if(m_hlines->begin(), m_hlines->end(),
+                    [this](const HLine& h) { return h.source_tf == m_timeframe; }), m_hlines->end());
+            }
+            if (m_trendlines) {
+                m_trendlines->erase(std::remove_if(m_trendlines->begin(), m_trendlines->end(),
+                    [this](const TrendLine& t) { return t.source_tf == m_timeframe; }), m_trendlines->end());
+            }
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::MenuItem("Reset Zoom")) {
+            if (m_view) m_view->reset();
+        }
+
+        ImGui::EndPopup();
+    }
+
     // Show crosshair
     if (is_hovered && !m_is_panning && m_dragging_hline < 0 && m_dragging_trendline < 0) {
         float hover_y = io.MousePos.y;
@@ -732,6 +787,29 @@ bool ChartWidget::render(ImVec2 size) {
             ImVec2(chart_pos.x + canvas_size.x - 2, hover_y + 8),
             make_color(60, 60, 60));
         draw_list->AddText(ImVec2(chart_pos.x + canvas_size.x - padding_right + 5, hover_y - 6), make_color(200, 200, 200), label);
+    }
+
+    // Draw OHLC info box for hovered candle
+    if (m_hovered_candle >= 0 && m_hovered_candle < static_cast<int>(m_candles.size())) {
+        const Candle& hc = m_candles[static_cast<size_t>(m_hovered_candle)];
+        bool bullish = hc.close >= hc.open;
+        ImU32 price_color = bullish ? make_color(38, 166, 91) : make_color(214, 69, 65);
+
+        char ohlc_text[128];
+        std::snprintf(ohlc_text, sizeof(ohlc_text), "O: %.2f  H: %.2f  L: %.2f  C: %.2f  V: %.0f",
+            static_cast<double>(hc.open), static_cast<double>(hc.high),
+            static_cast<double>(hc.low), static_cast<double>(hc.close),
+            static_cast<double>(hc.volume));
+
+        ImVec2 text_size = ImGui::CalcTextSize(ohlc_text);
+        float box_x = chart_pos.x + padding_left + 5;
+        float box_y = chart_pos.y + padding_top + 5;
+
+        draw_list->AddRectFilled(
+            ImVec2(box_x - 3, box_y - 2),
+            ImVec2(box_x + text_size.x + 3, box_y + text_size.y + 2),
+            make_color(30, 30, 35, 220));
+        draw_list->AddText(ImVec2(box_x, box_y), price_color, ohlc_text);
     }
 
     // Draw volume panel

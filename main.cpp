@@ -55,6 +55,49 @@ struct SymbolState {
 };
 static SymbolState g_symbol_states[NUM_TICKERS];
 
+// Undo/redo for drawings
+struct DrawingSnapshot {
+    std::vector<HLine> hlines;
+    std::vector<TrendLine> trendlines;
+};
+static const size_t MAX_UNDO_HISTORY = 50;
+static std::vector<DrawingSnapshot> g_undo_stack[NUM_TICKERS];
+static std::vector<DrawingSnapshot> g_redo_stack[NUM_TICKERS];
+
+static void undo_drawing(int ticker_idx) {
+    if (ticker_idx < 0 || ticker_idx >= NUM_TICKERS) return;
+    if (g_undo_stack[ticker_idx].empty()) return;
+
+    // Save current state to redo
+    DrawingSnapshot current;
+    current.hlines = g_symbol_states[ticker_idx].hlines;
+    current.trendlines = g_symbol_states[ticker_idx].trendlines;
+    g_redo_stack[ticker_idx].push_back(current);
+
+    // Restore previous state
+    DrawingSnapshot& prev = g_undo_stack[ticker_idx].back();
+    g_symbol_states[ticker_idx].hlines = prev.hlines;
+    g_symbol_states[ticker_idx].trendlines = prev.trendlines;
+    g_undo_stack[ticker_idx].pop_back();
+}
+
+static void redo_drawing(int ticker_idx) {
+    if (ticker_idx < 0 || ticker_idx >= NUM_TICKERS) return;
+    if (g_redo_stack[ticker_idx].empty()) return;
+
+    // Save current state to undo
+    DrawingSnapshot current;
+    current.hlines = g_symbol_states[ticker_idx].hlines;
+    current.trendlines = g_symbol_states[ticker_idx].trendlines;
+    g_undo_stack[ticker_idx].push_back(current);
+
+    // Restore redo state
+    DrawingSnapshot& next = g_redo_stack[ticker_idx].back();
+    g_symbol_states[ticker_idx].hlines = next.hlines;
+    g_symbol_states[ticker_idx].trendlines = next.trendlines;
+    g_redo_stack[ticker_idx].pop_back();
+}
+
 // Drawing tool state
 static ChartDrawMode g_draw_mode = CHART_DRAW_NONE;
 static int g_current_color_idx = 0;
@@ -120,9 +163,15 @@ static void process_hotkeys() {
             // Sell all at bid-5c
             int qty = g_order_manager.calculate_sell_quantity(symbol, 100);
             if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f);
-        } else if (ImGui::IsKeyPressed(ImGuiKey_Z)) {
-            // Cancel all pending orders
+        } else if (ImGui::IsKeyPressed(ImGuiKey_X)) {
+            // Cancel all pending orders (Ctrl+X)
             g_order_manager.cancel_all_orders(nullptr);
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Z)) {
+            // Undo drawing (Ctrl+Z)
+            undo_drawing(g_selected_ticker);
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Y)) {
+            // Redo drawing (Ctrl+Y)
+            redo_drawing(g_selected_ticker);
         }
     }
 
@@ -324,6 +373,38 @@ int main(int argc, char** argv) {
 
         // Process hotkeys
         process_hotkeys();
+
+        // Track drawing state for undo (save before any modification)
+        static size_t prev_hlines_count[NUM_TICKERS] = {0};
+        static size_t prev_trendlines_count[NUM_TICKERS] = {0};
+        for (int i = 0; i < NUM_TICKERS; ++i) {
+            size_t hcount = g_symbol_states[i].hlines.size();
+            size_t tcount = g_symbol_states[i].trendlines.size();
+            // Save state if lines were added (new drawing)
+            if (hcount > prev_hlines_count[i] || tcount > prev_trendlines_count[i]) {
+                // Save the state BEFORE the new line was added
+                DrawingSnapshot snapshot;
+                if (hcount > prev_hlines_count[i]) {
+                    snapshot.hlines.assign(g_symbol_states[i].hlines.begin(),
+                        g_symbol_states[i].hlines.begin() + static_cast<long>(prev_hlines_count[i]));
+                } else {
+                    snapshot.hlines = g_symbol_states[i].hlines;
+                }
+                if (tcount > prev_trendlines_count[i]) {
+                    snapshot.trendlines.assign(g_symbol_states[i].trendlines.begin(),
+                        g_symbol_states[i].trendlines.begin() + static_cast<long>(prev_trendlines_count[i]));
+                } else {
+                    snapshot.trendlines = g_symbol_states[i].trendlines;
+                }
+                g_undo_stack[i].push_back(snapshot);
+                if (g_undo_stack[i].size() > MAX_UNDO_HISTORY) {
+                    g_undo_stack[i].erase(g_undo_stack[i].begin());
+                }
+                g_redo_stack[i].clear();
+            }
+            prev_hlines_count[i] = hcount;
+            prev_trendlines_count[i] = tcount;
+        }
 
         // Update charts for selected ticker
         update_charts_for_selected_ticker();
