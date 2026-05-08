@@ -1,0 +1,6 @@
+# Build artifacts
+*.o
+ucharts
+
+# Dependencies
+imgui/
