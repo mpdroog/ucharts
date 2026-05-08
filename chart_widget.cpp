@@ -265,6 +265,7 @@ bool ChartWidget::render(ImVec2 size) {
     ImGui::InvisibleButton(id, canvas_size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
 
     bool is_hovered = ImGui::IsItemHovered();
+    bool is_active = ImGui::IsItemActive();
     bool double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && is_hovered;
     const ImGuiIO& io = ImGui::GetIO();
 
@@ -384,19 +385,22 @@ bool ChartWidget::render(ImVec2 size) {
 
     // Handle pan with left drag
     if (m_draw_mode == CHART_DRAW_NONE && m_dragging_hline < 0 && m_dragging_trendline < 0) {
-        if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !double_clicked) {
+        if (is_active && !m_is_panning && !double_clicked) {
+            // Start panning
             m_is_panning = true;
             m_pan_start_x = io.MousePos.x;
             m_pan_start_pan = view->pan_x;
         }
-    }
-    if (m_is_panning) {
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            float delta = (m_pan_start_x - io.MousePos.x) / candle_width;
-            view->pan_x = m_pan_start_pan + delta;
-        } else {
-            m_is_panning = false;
+        if (m_is_panning) {
+            if (is_active) {
+                float delta = (m_pan_start_x - io.MousePos.x) / candle_width;
+                view->pan_x = m_pan_start_pan + delta;
+            } else {
+                m_is_panning = false;
+            }
         }
+    } else if (!is_active) {
+        m_is_panning = false;
     }
 
     // Determine hovered candle
