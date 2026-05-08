@@ -16,7 +16,7 @@ ChartWidget::ChartWidget()
 
 void ChartWidget::set_candles(const std::vector<Candle>& candles) {
     m_candles = candles;
-    recalculate_indicators();
+    // Don't recalculate here - wait for set_indicator_settings or explicit call
 }
 
 void ChartWidget::set_title(const char* title) {
@@ -214,6 +214,9 @@ void ChartWidget::draw_styled_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 c
 }
 
 bool ChartWidget::render(ImVec2 size) {
+    // Always recalculate indicators at render time to ensure current settings are used
+    recalculate_indicators();
+
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
     ImVec2 canvas_size = size;
