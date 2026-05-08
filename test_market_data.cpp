@@ -1,0 +1,449 @@
+// test_market_data.cpp - Unit tests for market data module
+// Compile: clang++ -std=c++11 -o test_market_data test_market_data.cpp market_data.cpp
+
+#include "market_data.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <sys/stat.h>
+#include <unistd.h>
+
+// ============================================================================
+// Test helpers
+// ============================================================================
+
+static int g_tests_run = 0;
+static int g_tests_passed = 0;
+static const char* TEST_DATA_DIR = "test_data";
+
+#define TEST(name) static void test_##name()
+#define RUN_TEST(name) do { \
+    g_tests_run++; \
+    std::printf("Running %s... ", #name); \
+    test_##name(); \
+    g_tests_passed++; \
+    std::printf("PASSED\n"); \
+} while(0)
+
+#define ASSERT_TRUE(cond) do { \
+    if (!(cond)) { \
+        std::printf("FAILED: %s is false (line %d)\n", #cond, __LINE__); \
+        std::exit(1); \
+    } \
+} while(0)
+
+#define ASSERT_FALSE(cond) ASSERT_TRUE(!(cond))
+
+#define ASSERT_EQ(a, b) do { \
+    if ((a) != (b)) { \
+        std::printf("FAILED: %s != %s (line %d)\n", #a, #b, __LINE__); \
+        std::exit(1); \
+    } \
+} while(0)
+
+#define ASSERT_STREQ(a, b) do { \
+    if (std::strcmp((a), (b)) != 0) { \
+        std::printf("FAILED: \"%s\" != \"%s\" (line %d)\n", (a), (b), __LINE__); \
+        std::exit(1); \
+    } \
+} while(0)
+
+#define ASSERT_FLOAT_EQ(a, b, eps) do { \
+    if (std::fabs((a) - (b)) > (eps)) { \
+        std::printf("FAILED: %s (%.4f) != %s (%.4f) (line %d)\n", #a, (double)(a), #b, (double)(b), __LINE__); \
+        std::exit(1); \
+    } \
+} while(0)
+
+// Create test data directory and files
+static void create_test_data() {
+    mkdir(TEST_DATA_DIR, 0755);
+
+    // Create level2 test file
+    {
+        char filepath[256];
+        std::snprintf(filepath, sizeof(filepath), "%s/level2_TEST.csv", TEST_DATA_DIR);
+        FILE* f = std::fopen(filepath, "w");
+        if (f) {
+            std::fprintf(f, "timestamp,symbol,side,exchange,price,size\n");
+            std::fprintf(f, "09:30:00.000,TEST,BID,NYSE,100.00,1000\n");
+            std::fprintf(f, "09:30:00.000,TEST,BID,ARCA,99.95,500\n");
+            std::fprintf(f, "09:30:00.000,TEST,BID,BATS,99.90,800\n");
+            std::fprintf(f, "09:30:00.000,TEST,ASK,NYSE,100.05,600\n");
+            std::fprintf(f, "09:30:00.000,TEST,ASK,ARCA,100.10,400\n");
+            std::fprintf(f, "09:30:00.000,TEST,ASK,BATS,100.15,700\n");
+            std::fclose(f);
+        }
+    }
+
+    // Create timesales test file
+    {
+        char filepath[256];
+        std::snprintf(filepath, sizeof(filepath), "%s/timesales_TEST.csv", TEST_DATA_DIR);
+        FILE* f = std::fopen(filepath, "w");
+        if (f) {
+            std::fprintf(f, "timestamp,symbol,price,size,direction\n");
+            std::fprintf(f, "09:30:00.100,TEST,100.00,100,SAME\n");
+            std::fprintf(f, "09:30:00.200,TEST,100.05,200,UP\n");
+            std::fprintf(f, "09:30:00.300,TEST,100.02,150,DOWN\n");
+            std::fprintf(f, "09:30:00.400,TEST,100.02,100,SAME\n");
+            std::fprintf(f, "09:30:00.500,TEST,100.08,250,UP\n");
+            std::fclose(f);
+        }
+    }
+
+    // Create daily candles test file
+    {
+        char filepath[256];
+        std::snprintf(filepath, sizeof(filepath), "%s/candles_TEST_daily.csv", TEST_DATA_DIR);
+        FILE* f = std::fopen(filepath, "w");
+        if (f) {
+            std::fprintf(f, "timestamp,open,high,low,close,volume\n");
+            std::fprintf(f, "2024-01-02,100.00,102.50,99.50,101.75,15000\n");
+            std::fprintf(f, "2024-01-03,101.75,103.00,100.50,102.25,12500\n");
+            std::fprintf(f, "2024-01-04,102.25,104.00,101.00,103.50,18000\n");
+            std::fprintf(f, "2024-01-05,103.50,105.25,102.75,104.00,14200\n");
+            std::fprintf(f, "2024-01-08,104.00,104.50,101.00,101.50,22000\n");
+            std::fclose(f);
+        }
+    }
+
+    // Create 1m candles test file
+    {
+        char filepath[256];
+        std::snprintf(filepath, sizeof(filepath), "%s/candles_TEST_1m.csv", TEST_DATA_DIR);
+        FILE* f = std::fopen(filepath, "w");
+        if (f) {
+            std::fprintf(f, "timestamp,open,high,low,close,volume\n");
+            std::fprintf(f, "09:30,100.00,100.10,99.95,100.05,1000\n");
+            std::fprintf(f, "09:31,100.05,100.20,100.00,100.15,1200\n");
+            std::fprintf(f, "09:32,100.15,100.25,100.10,100.20,800\n");
+            std::fclose(f);
+        }
+    }
+
+    // Create 5m candles test file
+    {
+        char filepath[256];
+        std::snprintf(filepath, sizeof(filepath), "%s/candles_TEST_5m.csv", TEST_DATA_DIR);
+        FILE* f = std::fopen(filepath, "w");
+        if (f) {
+            std::fprintf(f, "timestamp,open,high,low,close,volume\n");
+            std::fprintf(f, "09:30,100.00,100.30,99.90,100.20,5000\n");
+            std::fprintf(f, "09:35,100.20,100.50,100.15,100.40,6000\n");
+            std::fclose(f);
+        }
+    }
+}
+
+static void cleanup_test_data() {
+    // Remove test files
+    char filepath[256];
+    std::snprintf(filepath, sizeof(filepath), "%s/level2_TEST.csv", TEST_DATA_DIR);
+    remove(filepath);
+    std::snprintf(filepath, sizeof(filepath), "%s/timesales_TEST.csv", TEST_DATA_DIR);
+    remove(filepath);
+    std::snprintf(filepath, sizeof(filepath), "%s/candles_TEST_daily.csv", TEST_DATA_DIR);
+    remove(filepath);
+    std::snprintf(filepath, sizeof(filepath), "%s/candles_TEST_1m.csv", TEST_DATA_DIR);
+    remove(filepath);
+    std::snprintf(filepath, sizeof(filepath), "%s/candles_TEST_5m.csv", TEST_DATA_DIR);
+    remove(filepath);
+    rmdir(TEST_DATA_DIR);
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+TEST(has_symbol_empty) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+
+    ASSERT_FALSE(md.has_symbol(nullptr));
+    ASSERT_FALSE(md.has_symbol(""));
+    ASSERT_FALSE(md.has_symbol("NONEXISTENT"));
+}
+
+TEST(has_symbol_exists) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+
+    ASSERT_TRUE(md.has_symbol("TEST"));
+}
+
+TEST(load_symbol_nonexistent) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+
+    ASSERT_FALSE(md.load_symbol("NONEXISTENT"));
+}
+
+TEST(load_symbol_success) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+
+    ASSERT_TRUE(md.load_symbol("TEST"));
+}
+
+TEST(get_level2) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Level2Entry> bids, asks;
+    float best_bid, best_ask;
+
+    ASSERT_TRUE(md.get_level2("TEST", bids, asks, best_bid, best_ask));
+
+    ASSERT_EQ(bids.size(), 3u);
+    ASSERT_EQ(asks.size(), 3u);
+
+    // Bids should be sorted descending (highest first)
+    ASSERT_FLOAT_EQ(bids[0].price, 100.00f, 0.01f);
+    ASSERT_FLOAT_EQ(bids[1].price, 99.95f, 0.01f);
+    ASSERT_FLOAT_EQ(bids[2].price, 99.90f, 0.01f);
+
+    // Asks should be sorted ascending (lowest first)
+    ASSERT_FLOAT_EQ(asks[0].price, 100.05f, 0.01f);
+    ASSERT_FLOAT_EQ(asks[1].price, 100.10f, 0.01f);
+    ASSERT_FLOAT_EQ(asks[2].price, 100.15f, 0.01f);
+
+    ASSERT_FLOAT_EQ(best_bid, 100.00f, 0.01f);
+    ASSERT_FLOAT_EQ(best_ask, 100.05f, 0.01f);
+}
+
+TEST(get_level2_exchange_names) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Level2Entry> bids, asks;
+    float best_bid, best_ask;
+
+    ASSERT_TRUE(md.get_level2("TEST", bids, asks, best_bid, best_ask));
+
+    ASSERT_STREQ(bids[0].exchange, "NYSE");
+    ASSERT_STREQ(bids[1].exchange, "ARCA");
+    ASSERT_STREQ(bids[2].exchange, "BATS");
+}
+
+TEST(get_level2_sizes) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Level2Entry> bids, asks;
+    float best_bid, best_ask;
+
+    ASSERT_TRUE(md.get_level2("TEST", bids, asks, best_bid, best_ask));
+
+    ASSERT_EQ(bids[0].size, 1000);
+    ASSERT_EQ(bids[1].size, 500);
+    ASSERT_EQ(bids[2].size, 800);
+}
+
+TEST(get_level2_colors) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Level2Entry> bids, asks;
+    float best_bid, best_ask;
+
+    ASSERT_TRUE(md.get_level2("TEST", bids, asks, best_bid, best_ask));
+
+    // Each level should have a different color
+    ASSERT_TRUE(bids[0].color != 0);
+    ASSERT_TRUE(asks[0].color != 0);
+    ASSERT_TRUE(bids[0].color != asks[0].color);
+}
+
+TEST(get_time_sales) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<TimeSalesEntry> entries;
+    ASSERT_TRUE(md.get_time_sales("TEST", entries, 15));
+
+    ASSERT_EQ(entries.size(), 5u);
+}
+
+TEST(time_sales_direction) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<TimeSalesEntry> entries;
+    ASSERT_TRUE(md.get_time_sales("TEST", entries, 15));
+
+    ASSERT_EQ(entries[0].direction, DIR_SAME);
+    ASSERT_EQ(entries[1].direction, DIR_UP);
+    ASSERT_EQ(entries[2].direction, DIR_DOWN);
+    ASSERT_EQ(entries[3].direction, DIR_SAME);
+    ASSERT_EQ(entries[4].direction, DIR_UP);
+}
+
+TEST(time_sales_prices) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<TimeSalesEntry> entries;
+    ASSERT_TRUE(md.get_time_sales("TEST", entries, 15));
+
+    ASSERT_FLOAT_EQ(entries[0].price, 100.00f, 0.01f);
+    ASSERT_FLOAT_EQ(entries[1].price, 100.05f, 0.01f);
+    ASSERT_FLOAT_EQ(entries[4].price, 100.08f, 0.01f);
+}
+
+TEST(time_sales_timestamps) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<TimeSalesEntry> entries;
+    ASSERT_TRUE(md.get_time_sales("TEST", entries, 15));
+
+    ASSERT_STREQ(entries[0].timestamp, "09:30:00.100");
+    ASSERT_STREQ(entries[4].timestamp, "09:30:00.500");
+}
+
+TEST(get_candles_daily) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Candle> candles;
+    ASSERT_TRUE(md.get_candles("TEST", TF_DAILY, candles, 200));
+
+    ASSERT_EQ(candles.size(), 5u);
+
+    ASSERT_FLOAT_EQ(candles[0].open, 100.00f, 0.01f);
+    ASSERT_FLOAT_EQ(candles[0].close, 101.75f, 0.01f);
+    ASSERT_FLOAT_EQ(candles[4].close, 101.50f, 0.01f);
+}
+
+TEST(get_candles_1m) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Candle> candles;
+    ASSERT_TRUE(md.get_candles("TEST", TF_1MIN, candles, 200));
+
+    ASSERT_EQ(candles.size(), 3u);
+}
+
+TEST(get_candles_5m) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Candle> candles;
+    ASSERT_TRUE(md.get_candles("TEST", TF_5MIN, candles, 200));
+
+    ASSERT_EQ(candles.size(), 2u);
+}
+
+TEST(get_candles_limit) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Candle> candles;
+    ASSERT_TRUE(md.get_candles("TEST", TF_DAILY, candles, 3));
+
+    ASSERT_EQ(candles.size(), 3u);
+    // Should get the last 3 candles
+    ASSERT_STREQ(candles[2].timestamp, "2024-01-08");
+}
+
+TEST(get_current_price) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    float price = md.get_current_price("TEST");
+    ASSERT_TRUE(price > 0);
+}
+
+TEST(unload_symbol) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+    ASSERT_TRUE(md.load_symbol("TEST"));
+
+    std::vector<Candle> candles;
+    ASSERT_TRUE(md.get_candles("TEST", TF_DAILY, candles, 200));
+    ASSERT_TRUE(candles.size() > 0);
+
+    md.unload_symbol("TEST");
+
+    candles.clear();
+    ASSERT_FALSE(md.get_candles("TEST", TF_DAILY, candles, 200));
+}
+
+TEST(simulation_control) {
+    MarketData md;
+    ASSERT_FALSE(md.is_running());
+
+    md.start_simulation();
+    ASSERT_TRUE(md.is_running());
+
+    md.stop_simulation();
+    ASSERT_FALSE(md.is_running());
+}
+
+TEST(empty_symbol_returns_false) {
+    MarketData md;
+    md.set_data_dir(TEST_DATA_DIR);
+
+    std::vector<Level2Entry> bids, asks;
+    float best_bid, best_ask;
+    ASSERT_FALSE(md.get_level2("", bids, asks, best_bid, best_ask));
+    ASSERT_FALSE(md.get_level2(nullptr, bids, asks, best_bid, best_ask));
+
+    std::vector<TimeSalesEntry> ts;
+    ASSERT_FALSE(md.get_time_sales("", ts));
+
+    std::vector<Candle> candles;
+    ASSERT_FALSE(md.get_candles("", TF_DAILY, candles));
+}
+
+// ============================================================================
+// Main
+// ============================================================================
+
+int main() {
+    std::printf("Running market data tests...\n\n");
+
+    create_test_data();
+
+    RUN_TEST(has_symbol_empty);
+    RUN_TEST(has_symbol_exists);
+    RUN_TEST(load_symbol_nonexistent);
+    RUN_TEST(load_symbol_success);
+    RUN_TEST(get_level2);
+    RUN_TEST(get_level2_exchange_names);
+    RUN_TEST(get_level2_sizes);
+    RUN_TEST(get_level2_colors);
+    RUN_TEST(get_time_sales);
+    RUN_TEST(time_sales_direction);
+    RUN_TEST(time_sales_prices);
+    RUN_TEST(time_sales_timestamps);
+    RUN_TEST(get_candles_daily);
+    RUN_TEST(get_candles_1m);
+    RUN_TEST(get_candles_5m);
+    RUN_TEST(get_candles_limit);
+    RUN_TEST(get_current_price);
+    RUN_TEST(unload_symbol);
+    RUN_TEST(simulation_control);
+    RUN_TEST(empty_symbol_returns_false);
+
+    cleanup_test_data();
+
+    std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
+    return 0;
+}
