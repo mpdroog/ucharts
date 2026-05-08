@@ -2,8 +2,21 @@
 *.o
 ucharts
 
+# Test binaries
+test_logic
+test_database
+test_market_data
+test_order_manager
+test_integration
+
+# Database files
+*.db
+
 # Dependencies
 imgui/
 
 # ImGui settings
 imgui.ini
+
+# macOS
+.DS_Store
