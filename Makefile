@@ -103,10 +103,19 @@ check-deps:
 		exit 1; \
 	fi
 
+# Test target (no GUI dependencies)
+TEST_CXXFLAGS = -std=c++11 -O2 -Wall -Wextra -Wpedantic -Werror
+
+test: test_logic
+	./test_logic
+
+test_logic: test_logic.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ $<
+
 clean:
-	rm -f $(OBJS) $(IMGUI_OBJS) $(TARGET)
+	rm -f $(OBJS) $(IMGUI_OBJS) $(TARGET) test_logic
 
 clean-all: clean
 	rm -rf $(IMGUI_DIR)
 
-.PHONY: all clean clean-all check-deps
+.PHONY: all clean clean-all check-deps test
