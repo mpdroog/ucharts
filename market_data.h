@@ -17,6 +17,7 @@ enum class DataSourceMode {
 
 
 // Market data manager for loading and streaming simulation data
+// SINGLETON: Use get_market_data() to access the instance
 class MarketData {
 public:
     // Loading state for async operations
@@ -27,12 +28,20 @@ public:
         ERROR         // Loading failed
     };
 
-    MarketData();
     ~MarketData();
 
-    // Non-copyable (owns mutex, manages async state)
+    // Non-copyable, non-movable (singleton)
     MarketData(const MarketData&) = delete;
     MarketData& operator=(const MarketData&) = delete;
+    MarketData(MarketData&&) = delete;
+    MarketData& operator=(MarketData&&) = delete;
+
+private:
+    // Private constructor - use get_market_data() instead
+    MarketData();
+    friend MarketData& get_market_data();
+
+public:
 
     // Set the data directory (for file-based loading)
     void set_data_dir(const char* dir);

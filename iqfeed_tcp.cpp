@@ -129,7 +129,7 @@ bool IQFeedLookup::connect(const char* host, int port) {
     return true;
 }
 
-void IQFeedLookup::disconnect() {
+void IQFeedLookup::disconnect() EXCLUDES(m_mutex) {
     // Check if already disconnected
     bool was_running = m_running.exchange(false);
     if (!was_running) {
@@ -138,7 +138,7 @@ void IQFeedLookup::disconnect() {
 
     // Wake up worker thread
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        MutexLock lock(m_mutex);
         m_cond.notify_all();
     }
 
@@ -152,7 +152,7 @@ void IQFeedLookup::disconnect() {
     }
 
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        MutexLock lock(m_mutex);
         m_requests.clear();
     }
 }
@@ -275,17 +275,17 @@ bool IQFeedLookup::read_until_endmsg(std::string& response, int expected_lines) 
     return false;
 }
 
-void IQFeedLookup::set_callback(LookupCallback callback) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+void IQFeedLookup::set_callback(LookupCallback callback) EXCLUDES(m_mutex) {
+    MutexLock lock(m_mutex);
     m_callback = callback;
 }
 
-bool IQFeedLookup::has_pending_requests() const {
-    std::lock_guard<std::mutex> lock(m_mutex);
+bool IQFeedLookup::has_pending_requests() const EXCLUDES(m_mutex) {
+    MutexLock lock(m_mutex);
     return !m_requests.empty();
 }
 
-void IQFeedLookup::fetch_daily(const char* symbol, int datapoints, void* user_data) {
+void IQFeedLookup::fetch_daily(const char* symbol, int datapoints, void* user_data) EXCLUDES(m_mutex) {
     Request req;
     req.type = LookupRequestType::DAILY;
     to_uppercase(req.symbol, symbol, sizeof(req.symbol));
@@ -294,7 +294,7 @@ void IQFeedLookup::fetch_daily(const char* symbol, int datapoints, void* user_da
     req.user_data = user_data;
 
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        MutexLock lock(m_mutex);
         m_requests.push_back(req);
     }
     m_cond.notify_one();
@@ -302,7 +302,7 @@ void IQFeedLookup::fetch_daily(const char* symbol, int datapoints, void* user_da
     LOG_D("iqfeed", "Queued async daily request for %s", req.symbol);
 }
 
-void IQFeedLookup::fetch_interval(const char* symbol, int interval_secs, int datapoints, void* user_data) {
+void IQFeedLookup::fetch_interval(const char* symbol, int interval_secs, int datapoints, void* user_data) EXCLUDES(m_mutex) {
     Request req;
     req.type = LookupRequestType::INTERVAL;
     to_uppercase(req.symbol, symbol, sizeof(req.symbol));
@@ -311,7 +311,7 @@ void IQFeedLookup::fetch_interval(const char* symbol, int interval_secs, int dat
     req.user_data = user_data;
 
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        MutexLock lock(m_mutex);
         m_requests.push_back(req);
     }
     m_cond.notify_one();
@@ -319,6 +319,7 @@ void IQFeedLookup::fetch_interval(const char* symbol, int interval_secs, int dat
     LOG_D("iqfeed", "Queued async interval request for %s (%ds)", req.symbol, interval_secs);
 }
 
+// Uses condition_variable which requires std::unique_lock
 void IQFeedLookup::worker_thread() {
     LOG_D("iqfeed", "Lookup worker thread started");
 
@@ -327,8 +328,9 @@ void IQFeedLookup::worker_thread() {
 
         // Wait for a request
         {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            m_cond.wait(lock, [this] { return !m_requests.empty() || !m_running; });
+            std::unique_lock<std::mutex> lock(m_mutex.native());
+            // Lambda is called with lock held, but analyzer can't prove it
+            m_cond.wait(lock, [this]() NO_THREAD_SAFETY_ANALYSIS { return !m_requests.empty() || !m_running; });
 
             if (!m_running) break;
             if (m_requests.empty()) continue;
@@ -343,7 +345,7 @@ void IQFeedLookup::worker_thread() {
     LOG_D("iqfeed", "Lookup worker thread exiting");
 }
 
-void IQFeedLookup::process_request(const Request& req) {
+void IQFeedLookup::process_request(const Request& req) EXCLUDES(m_mutex) {
     LookupResult result;
     result.success = false;
     safe_strcpy(result.symbol, req.symbol, sizeof(result.symbol));
@@ -358,7 +360,7 @@ void IQFeedLookup::process_request(const Request& req) {
         // Get callback outside lock to avoid deadlock
         LookupCallback cb;
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            MutexLock lock(m_mutex);
             cb = m_callback;
         }
         if (cb) {
@@ -403,7 +405,7 @@ void IQFeedLookup::process_request(const Request& req) {
     // Deliver result via callback - get callback outside lock to avoid deadlock
     LookupCallback cb;
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        MutexLock lock(m_mutex);
         cb = m_callback;
     }
     if (cb) {
@@ -490,7 +492,7 @@ bool IQFeedLevel1::connect(const char* host, int port) {
     return true;
 }
 
-void IQFeedLevel1::disconnect() {
+void IQFeedLevel1::disconnect() EXCLUDES(m_mutex) {
     m_running = false;
 
     if (m_socket >= 0) {
@@ -503,7 +505,7 @@ void IQFeedLevel1::disconnect() {
         m_thread.join();
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    MutexLock lock(m_mutex);
     m_quotes.clear();
 }
 
@@ -553,23 +555,23 @@ bool IQFeedLevel1::watch(const char* symbol) {
     return send_command(cmd);
 }
 
-bool IQFeedLevel1::unwatch(const char* symbol) {
+bool IQFeedLevel1::unwatch(const char* symbol) EXCLUDES(m_mutex) {
     char cmd[32];
     std::snprintf(cmd, sizeof(cmd), "r%s\r\n", symbol);
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    MutexLock lock(m_mutex);
     m_quotes.erase(symbol);
 
     return send_command(cmd);
 }
 
-void IQFeedLevel1::set_callback(L1Callback callback) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+void IQFeedLevel1::set_callback(L1Callback callback) EXCLUDES(m_mutex) {
+    MutexLock lock(m_mutex);
     m_callback = callback;
 }
 
-bool IQFeedLevel1::get_quote(const char* symbol, L1Quote& quote) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+bool IQFeedLevel1::get_quote(const char* symbol, L1Quote& quote) EXCLUDES(m_mutex) {
+    MutexLock lock(m_mutex);
     auto it = m_quotes.find(symbol);
     if (it == m_quotes.end()) {
         return false;
@@ -614,7 +616,7 @@ void IQFeedLevel1::parse_l1_message(const std::string& line) {
     }
 }
 
-void IQFeedLevel1::parse_summary_message(const char* data) {
+void IQFeedLevel1::parse_summary_message(const char* data) EXCLUDES(m_mutex) {
     // Format: SYMBOL,FIELD1,FIELD2,...
     // Default fields (protocol 6.2): Symbol,Exchange ID,Last,Change,Percent Change,
     // Total Volume,Incremental Volume,High,Low,Bid,Ask,Bid Size,Ask Size,Tick,
@@ -640,34 +642,41 @@ void IQFeedLevel1::parse_summary_message(const char* data) {
                             last_time, &open_interest, &open, &close_price);
 
     if (parsed >= 11 && symbol[0] != '\0') {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        L1Quote& quote = m_quotes[symbol];
-        safe_strcpy(quote.symbol, symbol, sizeof(quote.symbol));
-        quote.last = last;
-        quote.high = high;
-        quote.low = low;
-        quote.bid = bid;
-        quote.ask = ask;
-        quote.bid_size = bid_size;
-        quote.ask_size = ask_size;
-        quote.volume = total_vol;
-        if (parsed >= 19) {
-            quote.open = open;
-        }
-        if (parsed >= 20) {
-            quote.close = close_price;
-        }
-        if (last_time[0] != '\0') {
-            safe_strcpy(quote.last_time, last_time, sizeof(quote.last_time));
+        L1Quote quote_copy;
+        L1Callback callback_copy;
+
+        {
+            MutexLock lock(m_mutex);
+            L1Quote& quote = m_quotes[symbol];
+            safe_strcpy(quote.symbol, symbol, sizeof(quote.symbol));
+            quote.last = last;
+            quote.high = high;
+            quote.low = low;
+            quote.bid = bid;
+            quote.ask = ask;
+            quote.bid_size = bid_size;
+            quote.ask_size = ask_size;
+            quote.volume = total_vol;
+            if (parsed >= 19) {
+                quote.open = open;
+            }
+            if (parsed >= 20) {
+                quote.close = close_price;
+            }
+            if (last_time[0] != '\0') {
+                safe_strcpy(quote.last_time, last_time, sizeof(quote.last_time));
+            }
+            quote_copy = quote;
+            callback_copy = m_callback;
         }
 
-        if (m_callback) {
-            m_callback(quote);
+        if (callback_copy) {
+            callback_copy(quote_copy);
         }
     }
 }
 
-void IQFeedLevel1::parse_update_message(const char* data) {
+void IQFeedLevel1::parse_update_message(const char* data) EXCLUDES(m_mutex) {
     // Q messages only contain changed fields, but we'll parse what we can
     // This is a simplified version - full implementation would track field positions
     parse_summary_message(data);
@@ -707,7 +716,7 @@ bool IQFeedLevel2::connect(const char* host, int port) {
     return true;
 }
 
-void IQFeedLevel2::disconnect() {
+void IQFeedLevel2::disconnect() EXCLUDES(m_mutex) {
     m_running = false;
 
     if (m_socket >= 0) {
@@ -720,7 +729,7 @@ void IQFeedLevel2::disconnect() {
         m_thread.join();
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    MutexLock lock(m_mutex);
     m_books.clear();
 }
 
@@ -772,26 +781,26 @@ bool IQFeedLevel2::watch(const char* symbol, int max_levels) {
     return send_command(cmd);
 }
 
-bool IQFeedLevel2::unwatch(const char* symbol) {
+bool IQFeedLevel2::unwatch(const char* symbol) EXCLUDES(m_mutex) {
     char cmd[64];
     std::snprintf(cmd, sizeof(cmd), "RPL,%s\r\n", symbol);
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    MutexLock lock(m_mutex);
     m_books.erase(symbol);
 
     return send_command(cmd);
 }
 
-void IQFeedLevel2::set_callback(L2Callback callback) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+void IQFeedLevel2::set_callback(L2Callback callback) EXCLUDES(m_mutex) {
+    MutexLock lock(m_mutex);
     m_callback = callback;
 }
 
-bool IQFeedLevel2::get_book(const char* symbol, std::vector<L2Level>& bids, std::vector<L2Level>& asks) {
+bool IQFeedLevel2::get_book(const char* symbol, std::vector<L2Level>& bids, std::vector<L2Level>& asks) EXCLUDES(m_mutex) {
     bids.clear();
     asks.clear();
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    MutexLock lock(m_mutex);
     auto it = m_books.find(symbol);
     if (it == m_books.end()) {
         return false;
@@ -837,7 +846,7 @@ void IQFeedLevel2::parse_l2_message(const std::string& line) {
     }
 }
 
-void IQFeedLevel2::parse_level_summary(const char* data) {
+void IQFeedLevel2::parse_level_summary(const char* data) EXCLUDES(m_mutex) {
     // Format: 7,SYMBOL,SIDE,PRICE,SIZE,ORDERCOUNT,PRECISION,TIME,DATE
     char msg_id[4] = "";
     char symbol[16] = "";
@@ -856,44 +865,55 @@ void IQFeedLevel2::parse_level_summary(const char* data) {
         level.order_count = order_count;
         level.is_bid = (side[0] == 'B' || side[0] == 'b');
 
-        std::lock_guard<std::mutex> lock(m_mutex);
-        BookData& book = m_books[symbol];
-        std::vector<L2Level>& levels = level.is_bid ? book.bids : book.asks;
+        std::string symbol_copy;
+        std::vector<L2Level> bids_copy, asks_copy;
+        L2Callback callback_copy;
 
-        // Add or update level
-        bool found = false;
-        for (auto& l : levels) {
-            if (std::abs(l.price - price) < 0.0001f) {
-                l = level;
-                found = true;
-                break;
+        {
+            MutexLock lock(m_mutex);
+            BookData& book = m_books[symbol];
+            std::vector<L2Level>& levels = level.is_bid ? book.bids : book.asks;
+
+            // Add or update level
+            bool found = false;
+            for (auto& l : levels) {
+                if (std::abs(l.price - price) < 0.0001f) {
+                    l = level;
+                    found = true;
+                    break;
+                }
             }
-        }
-        if (!found) {
-            levels.push_back(level);
+            if (!found) {
+                levels.push_back(level);
+            }
+
+            // Sort: bids descending, asks ascending
+            if (level.is_bid) {
+                std::sort(book.bids.begin(), book.bids.end(),
+                         [](const L2Level& a, const L2Level& b) { return a.price > b.price; });
+            } else {
+                std::sort(book.asks.begin(), book.asks.end(),
+                         [](const L2Level& a, const L2Level& b) { return a.price < b.price; });
+            }
+
+            symbol_copy = symbol;
+            bids_copy = book.bids;
+            asks_copy = book.asks;
+            callback_copy = m_callback;
         }
 
-        // Sort: bids descending, asks ascending
-        if (level.is_bid) {
-            std::sort(book.bids.begin(), book.bids.end(),
-                     [](const L2Level& a, const L2Level& b) { return a.price > b.price; });
-        } else {
-            std::sort(book.asks.begin(), book.asks.end(),
-                     [](const L2Level& a, const L2Level& b) { return a.price < b.price; });
-        }
-
-        if (m_callback) {
-            m_callback(symbol, book.bids, book.asks);
+        if (callback_copy) {
+            callback_copy(symbol_copy.c_str(), bids_copy, asks_copy);
         }
     }
 }
 
-void IQFeedLevel2::parse_level_update(const char* data) {
+void IQFeedLevel2::parse_level_update(const char* data) EXCLUDES(m_mutex) {
     // Same format as summary
     parse_level_summary(data);
 }
 
-void IQFeedLevel2::parse_level_delete(const char* data) {
+void IQFeedLevel2::parse_level_delete(const char* data) EXCLUDES(m_mutex) {
     // Format: 9,SYMBOL,SIDE,PRICE,TIME,DATE
     char msg_id[4] = "";
     char symbol[16] = "";
@@ -906,18 +926,29 @@ void IQFeedLevel2::parse_level_delete(const char* data) {
     if (parsed >= 4 && symbol[0] != '\0') {
         bool is_bid = (side[0] == 'B' || side[0] == 'b');
 
-        std::lock_guard<std::mutex> lock(m_mutex);
-        BookData& book = m_books[symbol];
-        std::vector<L2Level>& levels = is_bid ? book.bids : book.asks;
+        std::string symbol_copy;
+        std::vector<L2Level> bids_copy, asks_copy;
+        L2Callback callback_copy;
 
-        // Remove the level
-        levels.erase(
-            std::remove_if(levels.begin(), levels.end(),
-                          [price](const L2Level& l) { return std::abs(l.price - price) < 0.0001f; }),
-            levels.end());
+        {
+            MutexLock lock(m_mutex);
+            BookData& book = m_books[symbol];
+            std::vector<L2Level>& levels = is_bid ? book.bids : book.asks;
 
-        if (m_callback) {
-            m_callback(symbol, book.bids, book.asks);
+            // Remove the level
+            levels.erase(
+                std::remove_if(levels.begin(), levels.end(),
+                              [price](const L2Level& l) { return std::abs(l.price - price) < 0.0001f; }),
+                levels.end());
+
+            symbol_copy = symbol;
+            bids_copy = book.bids;
+            asks_copy = book.asks;
+            callback_copy = m_callback;
+        }
+
+        if (callback_copy) {
+            callback_copy(symbol_copy.c_str(), bids_copy, asks_copy);
         }
     }
 }

@@ -16,6 +16,7 @@
 #include "chart_widget.h"
 #include "ticker_widget.h"
 #include "positions_widget.h"
+#include "iqfeed_tcp.h"
 #include "logger.h"
 
 #include <cstdio>
@@ -29,7 +30,7 @@
 
 // Global state
 static Database g_database;
-static MarketData g_market_data;
+// MarketData is a singleton - use get_market_data()
 static OrderManager g_order_manager;
 
 // Widgets
@@ -194,9 +195,9 @@ static void update_charts_for_selected_ticker() {
 
     // Get candle data from market data (empty is OK if data not yet loaded)
     std::vector<Candle> candles_1m, candles_5m, candles_daily;
-    (void)g_market_data.get_candles(symbol, Timeframe::M1, candles_1m, MAX_CANDLES);
-    (void)g_market_data.get_candles(symbol, Timeframe::M5, candles_5m, MAX_CANDLES);
-    (void)g_market_data.get_candles(symbol, Timeframe::DAILY, candles_daily, MAX_CANDLES);
+    (void)get_market_data().get_candles(symbol, Timeframe::M1, candles_1m, MAX_CANDLES);
+    (void)get_market_data().get_candles(symbol, Timeframe::M5, candles_5m, MAX_CANDLES);
+    (void)get_market_data().get_candles(symbol, Timeframe::DAILY, candles_daily, MAX_CANDLES);
 
     // Update charts
     g_chart_1m.set_candles(candles_1m);
@@ -223,7 +224,7 @@ static void update_charts_for_selected_ticker() {
     g_chart_daily.set_timeframe(Timeframe::DAILY);
 
     // Set current price (same across all timeframes)
-    float current_price = g_market_data.get_current_price(symbol);
+    float current_price = get_market_data().get_current_price(symbol);
     g_chart_1m.set_current_price(current_price);
     g_chart_5m.set_current_price(current_price);
     g_chart_daily.set_current_price(current_price);
@@ -255,9 +256,9 @@ static void load_session() {
 
             // Load market data and drawings for each symbol
             if (symbols[i][0] != '\0') {
-                if (!g_market_data.load_symbol(symbols[i])) {
-                    LOG_W("session", "Failed to load %s: %s", symbols[i], g_market_data.last_error());
-                    g_ticker_widgets[i].set_error(g_market_data.last_error());
+                if (!get_market_data().load_symbol(symbols[i])) {
+                    LOG_W("session", "Failed to load %s: %s", symbols[i], get_market_data().last_error());
+                    g_ticker_widgets[i].set_error(get_market_data().last_error());
                 }
                 g_database.load_hlines(symbols[i], g_symbol_states[i].hlines);
                 g_database.load_trendlines(symbols[i], g_symbol_states[i].trendlines);
@@ -352,11 +353,11 @@ int main(int argc, char** argv) {
     }
 
     // Initialize order manager
-    g_order_manager.init(&g_database, &g_market_data);
+    g_order_manager.init(&g_database, &get_market_data());
 
     // Initialize ticker widgets
     for (int i = 0; i < NUM_TICKERS; ++i) {
-        g_ticker_widgets[i].set_market_data(&g_market_data);
+        g_ticker_widgets[i].set_market_data(&get_market_data());
         g_ticker_widgets[i].set_order_manager(&g_order_manager);
     }
 
@@ -701,6 +702,12 @@ int main(int argc, char** argv) {
 
     // Save session before exit
     save_session();
+
+    // Disconnect IQFeed connections BEFORE static destruction
+    // This ensures background threads are stopped cleanly
+    get_iqfeed_lookup().disconnect();
+    get_iqfeed_level1().disconnect();
+    get_iqfeed_level2().disconnect();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

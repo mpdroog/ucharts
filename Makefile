@@ -34,6 +34,16 @@ IMGUI_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra
 # Test flags (less strict to allow test macros)
 TEST_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror
 
+# ThreadSanitizer flags for detecting race conditions
+TSAN_CXXFLAGS = -std=c++17 -O1 -g -fsanitize=thread -fno-omit-frame-pointer
+TSAN_LDFLAGS = -fsanitize=thread
+
+# Thread safety analysis (compile-time checking via Clang annotations)
+# -Wthread-safety: Core analysis - catches unguarded access to protected data
+# -Wthread-safety-negative: Strict mode - requires proof you don't hold lock at every acquisition
+THREAD_SAFE_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wthread-safety
+THREAD_SAFE_STRICT_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wthread-safety -Wthread-safety-negative
+
 ifeq ($(UNAME_S), Darwin)
     # macOS - clang doesn't support all GCC warnings
     CXXFLAGS = -std=c++17 -O2 \
@@ -149,10 +159,35 @@ test_integration: test_integration.cpp order_manager.cpp database.cpp market_dat
 test_async_io: test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
 	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
+test_threading: test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp
+	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
+
+# ThreadSanitizer targets - build with TSan to detect race conditions
+tsan: tsan_threading
+	@echo "Running ThreadSanitizer tests..."
+	./tsan_threading
+	@echo ""
+	@echo "ThreadSanitizer tests complete!"
+
+tsan_threading: test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp
+	$(CXX) $(TSAN_CXXFLAGS) -I/opt/homebrew/include -I/usr/local/include -pthread -o $@ test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp $(TSAN_LDFLAGS) $(TEST_LDFLAGS)
+
+# Static thread safety analysis (compile-time)
+thread-check:
+	@echo "Running thread safety analysis..."
+	$(CXX) $(THREAD_SAFE_CXXFLAGS) -I/opt/homebrew/include -I/usr/local/include -fsyntax-only iqfeed_tcp.cpp
+	@echo "Thread safety analysis complete (0 warnings expected)!"
+
+# Strict mode - also checks negative capabilities (proof of not holding lock)
+thread-check-strict:
+	@echo "Running STRICT thread safety analysis..."
+	$(CXX) $(THREAD_SAFE_STRICT_CXXFLAGS) -I/opt/homebrew/include -I/usr/local/include -fsyntax-only iqfeed_tcp.cpp
+	@echo "Strict analysis complete (some warnings expected - documents lock acquisition points)!"
+
 clean:
-	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_ucharts.db test_order_manager.db test_integration.db
+	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_ucharts.db test_order_manager.db test_integration.db
 
 clean-all: clean
 	rm -rf $(IMGUI_DIR)
 
-.PHONY: all clean clean-all check-deps test
+.PHONY: all clean clean-all check-deps test tsan thread-check thread-check-strict

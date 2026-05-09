@@ -8,11 +8,10 @@
 #include <cstdlib>
 #include <algorithm>
 
-// Global market data instance
-static MarketData g_market_data;
-
+// Singleton accessor (Meyer's singleton - thread-safe in C++11+)
 MarketData& get_market_data() {
-    return g_market_data;
+    static MarketData instance;
+    return instance;
 }
 
 // Preset colors for Level 2 display (distinguishable shades)
