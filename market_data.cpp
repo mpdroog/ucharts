@@ -3,10 +3,34 @@
 #include "http_client.h"
 #include "json_parser.h"
 #include "iqfeed_tcp.h"
+#include "logger.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include <cctype>
+#include <cassert>
+
+// Convert symbol to uppercase (IQFeed returns symbols in uppercase)
+static std::string normalize_symbol(const char* symbol) {
+    std::string result(symbol);
+    for (char& c : result) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return result;
+}
+
+// Assert that a symbol is uppercase (catches case sensitivity bugs early)
+// Call this when looking up symbols that should already be normalized
+static void assert_symbol_uppercase(const char* symbol, const char* context) {
+    for (const char* p = symbol; *p != '\0'; ++p) {
+        if (std::islower(static_cast<unsigned char>(*p))) {
+            LOG_E("market", "BUG: Lowercase symbol '%s' used in %s - should be uppercase!",
+                  symbol, context);
+            assert(false && "Lowercase symbol detected - symbols must be uppercase");
+        }
+    }
+}
 
 // Singleton accessor (Meyer's singleton - thread-safe in C++11+)
 MarketData& get_market_data() {
@@ -227,7 +251,7 @@ bool MarketData::has_symbol(const char* symbol) const {
 bool MarketData::is_loading(const char* symbol) const {
     if (symbol == nullptr || symbol[0] == '\0') return false;
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(std::string(symbol));
+    auto it = m_symbols.find(normalize_symbol(symbol));
     if (it == m_symbols.end()) return false;
     return it->second.loading_state == LoadingState::PENDING;
 }
@@ -235,7 +259,7 @@ bool MarketData::is_loading(const char* symbol) const {
 MarketData::LoadingState MarketData::get_loading_state(const char* symbol) const {
     if (symbol == nullptr || symbol[0] == '\0') return LoadingState::IDLE;
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(std::string(symbol));
+    auto it = m_symbols.find(normalize_symbol(symbol));
     if (it == m_symbols.end()) return LoadingState::IDLE;
     return it->second.loading_state;
 }
@@ -243,7 +267,7 @@ MarketData::LoadingState MarketData::get_loading_state(const char* symbol) const
 const char* MarketData::get_loading_error(const char* symbol) const {
     if (symbol == nullptr || symbol[0] == '\0') return "";
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(std::string(symbol));
+    auto it = m_symbols.find(normalize_symbol(symbol));
     if (it == m_symbols.end()) return "";
     return it->second.load_error;
 }
@@ -265,7 +289,7 @@ bool MarketData::load_symbol(const char* symbol) {
     }
 
     // File-based loading (original behavior)
-    std::string sym(symbol);
+    std::string sym = normalize_symbol(symbol);
     std::lock_guard<std::mutex> lock(m_mutex);
     SymbolData& data = m_symbols[sym];
     data.loaded = false;
@@ -324,7 +348,7 @@ bool MarketData::load_symbol(const char* symbol) {
 
 void MarketData::unload_symbol(const char* symbol) {
     if (symbol == nullptr) return;
-    m_symbols.erase(std::string(symbol));
+    m_symbols.erase(normalize_symbol(symbol));
 }
 
 ImU32 MarketData::get_level_color(int level_index, bool is_bid) {
@@ -343,7 +367,7 @@ bool MarketData::get_level2(const char* symbol, std::vector<Level2Entry>& bids,
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(std::string(symbol));
+    auto it = m_symbols.find(normalize_symbol(symbol));
     if (it == m_symbols.end() || !it->second.loaded) return false;
 
     const SymbolData& data = it->second;
@@ -375,7 +399,7 @@ bool MarketData::get_time_sales(const char* symbol, std::vector<TimeSalesEntry>&
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(std::string(symbol));
+    auto it = m_symbols.find(normalize_symbol(symbol));
     if (it == m_symbols.end() || !it->second.loaded) return false;
 
     const SymbolData& data = it->second;
@@ -396,8 +420,10 @@ bool MarketData::get_candles(const char* symbol, Timeframe tf, std::vector<Candl
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(std::string(symbol));
-    if (it == m_symbols.end() || !it->second.loaded) return false;
+    auto it = m_symbols.find(normalize_symbol(symbol));
+    if (it == m_symbols.end() || !it->second.loaded) {
+        return false;
+    }
 
     const SymbolData& data = it->second;
     const std::vector<Candle>* src = nullptr;
@@ -408,7 +434,9 @@ bool MarketData::get_candles(const char* symbol, Timeframe tf, std::vector<Candl
         case Timeframe::DAILY: src = &data.candles_daily; break;
     }
 
-    if (src == nullptr || src->empty()) return false;
+    if (src == nullptr || src->empty()) {
+        return false;
+    }
 
     // Get the last 'limit' candles
     size_t start = (src->size() > static_cast<size_t>(limit)) ? src->size() - static_cast<size_t>(limit) : 0;
@@ -423,7 +451,7 @@ float MarketData::get_current_price(const char* symbol) const {
     if (symbol == nullptr || symbol[0] == '\0') return 0;
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(std::string(symbol));
+    auto it = m_symbols.find(normalize_symbol(symbol));
     if (it == m_symbols.end() || !it->second.loaded) return 0;
 
     return it->second.current_price;
@@ -464,7 +492,7 @@ bool MarketData::parse_level2_csv(const char* filepath, const char* symbol) {
     FILE* file = std::fopen(filepath, "r");
     if (file == nullptr) return false;
 
-    std::string sym(symbol);
+    std::string sym = normalize_symbol(symbol);
     SymbolData& data = m_symbols[sym];
     data.level2_bids.clear();
     data.level2_asks.clear();
@@ -542,7 +570,7 @@ bool MarketData::parse_timesales_csv(const char* filepath, const char* symbol) {
     FILE* file = std::fopen(filepath, "r");
     if (file == nullptr) return false;
 
-    std::string sym(symbol);
+    std::string sym = normalize_symbol(symbol);
     SymbolData& data = m_symbols[sym];
     data.time_sales.clear();
 
@@ -659,7 +687,7 @@ bool MarketData::parse_candles_csv(const char* filepath, std::vector<Candle>& ca
 // ============================================================================
 
 bool MarketData::load_symbol_from_tcp(const char* symbol) {
-    std::string sym(symbol);
+    std::string sym = normalize_symbol(symbol);
 
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -721,11 +749,19 @@ bool MarketData::load_symbol_from_tcp(const char* symbol) {
 }
 
 void MarketData::on_lookup_result(const LookupResult& result) {
+    // Verify IQFeed returns uppercase symbols as expected
+    assert_symbol_uppercase(result.symbol, "on_lookup_result (from IQFeed)");
+
     std::string sym(result.symbol);
+    LOG_D("market", "on_lookup_result: symbol=%s success=%d candles=%zu type=%d interval=%d",
+          result.symbol, result.success ? 1 : 0, result.candles.size(),
+          static_cast<int>(result.type), result.interval_secs);
 
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_symbols.find(sym);
     if (it == m_symbols.end()) {
+        LOG_E("market", "BUG: Symbol '%s' from IQFeed not found in map! Check case sensitivity.",
+              result.symbol);
         return;  // Symbol no longer tracked
     }
 
@@ -765,14 +801,20 @@ void MarketData::on_lookup_result(const LookupResult& result) {
                         !data.candles_1m.empty() ||
                         !data.candles_5m.empty();
 
+        LOG_I("market", "All requests complete for %s: daily=%zu 1m=%zu 5m=%zu any_data=%d",
+              sym.c_str(), data.candles_daily.size(), data.candles_1m.size(),
+              data.candles_5m.size(), any_data ? 1 : 0);
+
         if (any_data) {
             data.loaded = true;
             data.loading_state = LoadingState::COMPLETE;
+            LOG_I("market", "Symbol %s marked as LOADED", sym.c_str());
         } else {
             data.loading_state = LoadingState::ERROR;
             if (data.load_error[0] == '\0') {
                 safe_strcpy(data.load_error, "No data received", sizeof(data.load_error));
             }
+            LOG_E("market", "Symbol %s load failed: %s", sym.c_str(), data.load_error);
         }
 
         // Clean up user_data (symbol string we allocated)
@@ -792,7 +834,7 @@ void MarketData::on_lookup_result(const LookupResult& result) {
 // ============================================================================
 
 bool MarketData::load_symbol_from_http(const char* symbol) {
-    std::string sym(symbol);
+    std::string sym = normalize_symbol(symbol);
     SymbolData& data = m_symbols[sym];
     data.loaded = false;
     data.level2_bids.clear();

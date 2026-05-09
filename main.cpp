@@ -199,6 +199,13 @@ static void update_charts_for_selected_ticker() {
     (void)get_market_data().get_candles(symbol, Timeframe::M5, candles_5m, MAX_CANDLES);
     (void)get_market_data().get_candles(symbol, Timeframe::DAILY, candles_daily, MAX_CANDLES);
 
+    // Warn if symbol is loaded but no data available (helps catch bugs)
+    auto load_state = get_market_data().get_loading_state(symbol);
+    if (load_state == MarketData::LoadingState::COMPLETE &&
+        candles_1m.empty() && candles_5m.empty() && candles_daily.empty()) {
+        LOG_W("main", "Symbol '%s' marked COMPLETE but no candle data available!", symbol);
+    }
+
     // Update charts
     g_chart_1m.set_candles(candles_1m);
     g_chart_1m.set_title("1-Min");
