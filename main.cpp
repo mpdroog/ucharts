@@ -16,6 +16,7 @@
 #include "chart_widget.h"
 #include "ticker_widget.h"
 #include "positions_widget.h"
+#include "logger.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -254,7 +255,10 @@ static void load_session() {
 
             // Load market data and drawings for each symbol
             if (symbols[i][0] != '\0') {
-                g_market_data.load_symbol(symbols[i]);
+                if (!g_market_data.load_symbol(symbols[i])) {
+                    LOG_W("session", "Failed to load %s: %s", symbols[i], g_market_data.last_error());
+                    g_ticker_widgets[i].set_error(g_market_data.last_error());
+                }
                 g_database.load_hlines(symbols[i], g_symbol_states[i].hlines);
                 g_database.load_trendlines(symbols[i], g_symbol_states[i].trendlines);
                 g_database.load_indicator_settings(symbols[i], g_symbol_states[i].indicators);
@@ -298,12 +302,18 @@ static void save_session() {
 }
 
 static void glfw_error_callback(int error, const char* description) {
-    fprintf(stderr, "GLFW Error %d: %s\n", error, description);
+    // Always log GLFW errors regardless of verbose mode
+    std::fprintf(stderr, "[GLFW] Error %d: %s\n", error, description);
 }
 
 int main(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
+    // Parse CLI arguments
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--verbose") == 0) {
+            set_log_level(LOG_DEBUG);
+            LOG_I("main", "Verbose logging enabled");
+        }
+    }
 
     glfwSetErrorCallback(glfw_error_callback);
     if (glfwInit() == GLFW_FALSE) {
@@ -338,7 +348,7 @@ int main(int argc, char** argv) {
 
     // Initialize database
     if (!g_database.init("trading.db")) {
-        fprintf(stderr, "Failed to initialize database\n");
+        LOG_E("main", "Failed to initialize database");
     }
 
     // Initialize order manager

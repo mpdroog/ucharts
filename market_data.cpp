@@ -2,6 +2,7 @@
 #include "market_data.h"
 #include "http_client.h"
 #include "json_parser.h"
+#include "iqfeed_tcp.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -42,7 +43,8 @@ static const ImU32 g_ask_colors[] = {
 };
 
 MarketData::MarketData()
-    : m_data_dir("data"), m_api_url("http://localhost:8080"), m_source_mode(SOURCE_IQFEED),
+    : m_data_dir("data"), m_api_url("http://localhost:8080"), m_tcp_host("127.0.0.1"),
+      m_source_mode(SOURCE_IQFEED), m_streams_connected(false),
       m_running(false), m_sim_index(0), m_current_timestamp(0) {
     m_current_time[0] = '\0';
     m_error[0] = '\0';
@@ -50,6 +52,14 @@ MarketData::MarketData()
 
 MarketData::~MarketData() {
     stop_simulation();
+
+    // Note: We intentionally don't clear the IQFeedLookup callback here because
+    // during static destruction, the order of destruction between g_market_data
+    // and g_lookup is undefined. The callback is already protected by checking
+    // if the callback is valid before calling.
+
+    // Disconnect streams (this is safe as L1/L2 instances handle their own cleanup)
+    disconnect_streams();
 }
 
 void MarketData::set_data_dir(const char* dir) {
@@ -67,6 +77,129 @@ void MarketData::set_api_url(const char* url) {
     }
 }
 
+void MarketData::set_tcp_host(const char* host) {
+    if (host != nullptr) {
+        m_tcp_host = host;
+    }
+}
+
+bool MarketData::connect_streams() {
+    if (m_streams_connected) {
+        return true;
+    }
+
+    // Connect to L1 (quotes)
+    if (!get_iqfeed_level1().connect(m_tcp_host.c_str(), IQFEED_LEVEL1_PORT)) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to connect L1: %s",
+                     get_iqfeed_level1().last_error());
+        return false;
+    }
+
+    // Connect to L2 (order book)
+    if (!get_iqfeed_level2().connect(m_tcp_host.c_str(), IQFEED_LEVEL2_PORT)) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to connect L2: %s",
+                     get_iqfeed_level2().last_error());
+        get_iqfeed_level1().disconnect();
+        return false;
+    }
+
+    m_streams_connected = true;
+    return true;
+}
+
+void MarketData::disconnect_streams() {
+    get_iqfeed_level1().disconnect();
+    get_iqfeed_level2().disconnect();
+    m_streams_connected = false;
+}
+
+bool MarketData::streams_connected() const {
+    return m_streams_connected;
+}
+
+bool MarketData::subscribe_quotes(const char* symbol) {
+    if (!m_streams_connected) {
+        if (!connect_streams()) {
+            return false;
+        }
+    }
+
+    // Subscribe to L1
+    if (!get_iqfeed_level1().watch(symbol)) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to watch L1 for %s", symbol);
+        return false;
+    }
+
+    // Subscribe to L2
+    if (!get_iqfeed_level2().watch(symbol, LEVEL2_DEPTH)) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to watch L2 for %s", symbol);
+        return false;
+    }
+
+    return true;
+}
+
+bool MarketData::unsubscribe_quotes(const char* symbol) {
+    get_iqfeed_level1().unwatch(symbol);
+    get_iqfeed_level2().unwatch(symbol);
+    return true;
+}
+
+void MarketData::update_from_streams() {
+    if (!m_streams_connected) return;
+
+    // Update all loaded symbols from L1/L2 streams
+    for (auto& kv : m_symbols) {
+        if (kv.second.loaded) {
+            update_l1_quote(kv.first.c_str());
+            update_l2_book(kv.first.c_str());
+        }
+    }
+}
+
+void MarketData::update_l1_quote(const char* symbol) {
+    L1Quote quote;
+    if (get_iqfeed_level1().get_quote(symbol, quote)) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_symbols.find(symbol);
+        if (it != m_symbols.end()) {
+            it->second.current_price = quote.last;
+        }
+    }
+}
+
+void MarketData::update_l2_book(const char* symbol) {
+    std::vector<L2Level> bids, asks;
+    if (get_iqfeed_level2().get_book(symbol, bids, asks)) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_symbols.find(symbol);
+        if (it != m_symbols.end()) {
+            SymbolData& data = it->second;
+            data.level2_bids.clear();
+            data.level2_asks.clear();
+
+            // Convert L2Level to Level2Entry
+            for (size_t i = 0; i < bids.size() && i < LEVEL2_DEPTH; i++) {
+                Level2Entry entry;
+                safe_strcpy(entry.exchange, "IQFEED", sizeof(entry.exchange));
+                entry.price = bids[i].price;
+                entry.size = bids[i].size;
+                entry.color = get_level_color(static_cast<int>(i), true);
+                data.level2_bids.push_back(entry);
+            }
+
+            for (size_t i = 0; i < asks.size() && i < LEVEL2_DEPTH; i++) {
+                Level2Entry entry;
+                safe_strcpy(entry.exchange, "IQFEED", sizeof(entry.exchange));
+                entry.price = asks[i].price;
+                entry.size = asks[i].size;
+                entry.color = get_level_color(static_cast<int>(i), false);
+                data.level2_asks.push_back(entry);
+            }
+        }
+    }
+}
+
 const char* MarketData::last_error() const {
     return m_error;
 }
@@ -74,8 +207,8 @@ const char* MarketData::last_error() const {
 bool MarketData::has_symbol(const char* symbol) const {
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
-    // For API mode, assume any symbol might be valid (API will error if not)
-    if (m_source_mode == SOURCE_IQFEED) {
+    // For API/TCP modes, assume any symbol might be valid (API will error if not)
+    if (m_source_mode == SOURCE_IQFEED || m_source_mode == SOURCE_IQFEED_HTTP) {
         return true;
     }
 
@@ -92,19 +225,49 @@ bool MarketData::has_symbol(const char* symbol) const {
     return false;
 }
 
+bool MarketData::is_loading(const char* symbol) const {
+    if (symbol == nullptr || symbol[0] == '\0') return false;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_symbols.find(std::string(symbol));
+    if (it == m_symbols.end()) return false;
+    return it->second.loading_state == LOAD_PENDING;
+}
+
+MarketData::LoadingState MarketData::get_loading_state(const char* symbol) const {
+    if (symbol == nullptr || symbol[0] == '\0') return LOAD_IDLE;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_symbols.find(std::string(symbol));
+    if (it == m_symbols.end()) return LOAD_IDLE;
+    return it->second.loading_state;
+}
+
+const char* MarketData::get_loading_error(const char* symbol) const {
+    if (symbol == nullptr || symbol[0] == '\0') return "";
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_symbols.find(std::string(symbol));
+    if (it == m_symbols.end()) return "";
+    return it->second.load_error;
+}
+
 bool MarketData::load_symbol(const char* symbol) {
     if (symbol == nullptr || symbol[0] == '\0') {
         std::snprintf(m_error, sizeof(m_error), "Empty symbol");
         return false;
     }
 
-    // Use API if configured
+    // Use TCP if configured (fastest)
     if (m_source_mode == SOURCE_IQFEED) {
-        return load_symbol_from_api(symbol);
+        return load_symbol_from_tcp(symbol);
+    }
+
+    // Use HTTP API if configured (slower, deprecated)
+    if (m_source_mode == SOURCE_IQFEED_HTTP) {
+        return load_symbol_from_http(symbol);
     }
 
     // File-based loading (original behavior)
     std::string sym(symbol);
+    std::lock_guard<std::mutex> lock(m_mutex);
     SymbolData& data = m_symbols[sym];
     data.loaded = false;
 
@@ -180,6 +343,7 @@ bool MarketData::get_level2(const char* symbol, std::vector<Level2Entry>& bids,
 
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
+    std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_symbols.find(std::string(symbol));
     if (it == m_symbols.end() || !it->second.loaded) return false;
 
@@ -211,6 +375,7 @@ bool MarketData::get_time_sales(const char* symbol, std::vector<TimeSalesEntry>&
 
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
+    std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_symbols.find(std::string(symbol));
     if (it == m_symbols.end() || !it->second.loaded) return false;
 
@@ -231,6 +396,7 @@ bool MarketData::get_candles(const char* symbol, Timeframe tf, std::vector<Candl
 
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
+    std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_symbols.find(std::string(symbol));
     if (it == m_symbols.end() || !it->second.loaded) return false;
 
@@ -257,6 +423,7 @@ bool MarketData::get_candles(const char* symbol, Timeframe tf, std::vector<Candl
 float MarketData::get_current_price(const char* symbol) const {
     if (symbol == nullptr || symbol[0] == '\0') return 0;
 
+    std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_symbols.find(std::string(symbol));
     if (it == m_symbols.end() || !it->second.loaded) return 0;
 
@@ -489,10 +656,143 @@ bool MarketData::parse_candles_csv(const char* filepath, std::vector<Candle>& ca
 }
 
 // ============================================================================
-// API-based loading (iqfeed HTTP API)
+// TCP-based loading (iqfeed TCP - faster)
 // ============================================================================
 
-bool MarketData::load_symbol_from_api(const char* symbol) {
+bool MarketData::load_symbol_from_tcp(const char* symbol) {
+    std::string sym(symbol);
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        SymbolData& data = m_symbols[sym];
+
+        // Already loading or loaded?
+        if (data.loading_state == LOAD_PENDING) {
+            return true;  // Already loading
+        }
+        if (data.loaded && data.loading_state == LOAD_COMPLETE) {
+            return true;  // Already loaded
+        }
+
+        // Reset state for new load
+        data.loaded = false;
+        data.loading_state = LOAD_PENDING;
+        data.pending_requests = 3;  // daily + 1min + 5min
+        data.load_error[0] = '\0';
+        data.level2_bids.clear();
+        data.level2_asks.clear();
+        data.time_sales.clear();
+        data.candles_1m.clear();
+        data.candles_5m.clear();
+        data.candles_daily.clear();
+    }
+
+    // Get lookup client and set up callback (connects on first use)
+    IQFeedLookup& lookup = get_iqfeed_lookup();
+    if (!lookup.is_connected()) {
+        // Set callback to receive results
+        lookup.set_callback([this](const LookupResult& result) {
+            this->on_lookup_result(result);
+        });
+
+        if (!lookup.connect(m_tcp_host.c_str(), IQFEED_LOOKUP_PORT)) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            SymbolData& data = m_symbols[sym];
+            data.loading_state = LOAD_ERROR;
+            data.pending_requests = 0;
+            std::snprintf(data.load_error, sizeof(data.load_error),
+                         "Failed to connect: %s", lookup.last_error());
+            std::snprintf(m_error, sizeof(m_error), "%s", data.load_error);
+            return false;
+        }
+    }
+
+    // Queue async fetch requests (returns immediately)
+    char* sym_copy = new char[sym.size() + 1];
+    safe_strcpy(sym_copy, sym.c_str(), sym.size() + 1);
+
+    lookup.fetch_daily(symbol, MAX_CANDLES, sym_copy);
+    lookup.fetch_interval(symbol, 60, MAX_CANDLES, sym_copy);
+    lookup.fetch_interval(symbol, 300, MAX_CANDLES, sym_copy);
+
+    // Note: L1/L2 subscription happens in on_lookup_result when data arrives
+    // to avoid blocking the UI thread
+
+    return true;
+}
+
+void MarketData::on_lookup_result(const LookupResult& result) {
+    std::string sym(result.symbol);
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_symbols.find(sym);
+    if (it == m_symbols.end()) {
+        return;  // Symbol no longer tracked
+    }
+
+    SymbolData& data = it->second;
+
+    if (result.success) {
+        // Copy candles to appropriate vector
+        if (result.type == LOOKUP_REQ_DAILY) {
+            data.candles_daily = result.candles;
+            if (!data.candles_daily.empty() && data.current_price == 0) {
+                data.current_price = data.candles_daily.back().close;
+            }
+        } else if (result.interval_secs == 60) {
+            data.candles_1m = result.candles;
+            if (!data.candles_1m.empty()) {
+                data.current_price = data.candles_1m.back().close;
+            }
+        } else if (result.interval_secs == 300) {
+            data.candles_5m = result.candles;
+        }
+    } else {
+        // Store first error
+        if (data.load_error[0] == '\0') {
+            safe_strcpy(data.load_error, result.error, sizeof(data.load_error));
+        }
+    }
+
+    // Decrement pending count
+    data.pending_requests--;
+
+    // Check if all requests complete
+    if (data.pending_requests <= 0) {
+        data.pending_requests = 0;
+
+        // Did we get any data?
+        bool any_data = !data.candles_daily.empty() ||
+                        !data.candles_1m.empty() ||
+                        !data.candles_5m.empty();
+
+        if (any_data) {
+            data.loaded = true;
+            data.loading_state = LOAD_COMPLETE;
+        } else {
+            data.loading_state = LOAD_ERROR;
+            if (data.load_error[0] == '\0') {
+                safe_strcpy(data.load_error, "No data received", sizeof(data.load_error));
+            }
+        }
+
+        // Clean up user_data (symbol string we allocated)
+        // Note: user_data is same for all 3 requests, only delete once
+        if (result.user_data != nullptr) {
+            delete[] static_cast<char*>(result.user_data);
+        }
+
+        // TODO: Subscribe to L1/L2 for real-time updates
+        // This should be done on a background thread to avoid blocking
+        // For now, L1/L2 streaming is disabled until async connection is implemented
+    }
+}
+
+// ============================================================================
+// HTTP-based loading (iqfeed HTTP API - deprecated, slower)
+// ============================================================================
+
+bool MarketData::load_symbol_from_http(const char* symbol) {
     std::string sym(symbol);
     SymbolData& data = m_symbols[sym];
     data.loaded = false;
@@ -506,22 +806,22 @@ bool MarketData::load_symbol_from_api(const char* symbol) {
     bool any_loaded = false;
 
     // Fetch daily candles
-    if (fetch_daily_candles(symbol, data.candles_daily)) {
+    if (fetch_daily_candles_http(symbol, data.candles_daily)) {
         any_loaded = true;
     }
 
     // Fetch 1-minute candles (interval=60 seconds)
-    if (fetch_minute_candles(symbol, 60, data.candles_1m)) {
+    if (fetch_minute_candles_http(symbol, 60, data.candles_1m)) {
         any_loaded = true;
     }
 
     // Fetch 5-minute candles (interval=300 seconds)
-    if (fetch_minute_candles(symbol, 300, data.candles_5m)) {
+    if (fetch_minute_candles_http(symbol, 300, data.candles_5m)) {
         any_loaded = true;
     }
 
     if (!any_loaded) {
-        std::snprintf(m_error, sizeof(m_error), "Failed to fetch data for %s from API", symbol);
+        std::snprintf(m_error, sizeof(m_error), "Failed to fetch data for %s from HTTP API", symbol);
         return false;
     }
 
@@ -536,7 +836,7 @@ bool MarketData::load_symbol_from_api(const char* symbol) {
     return true;
 }
 
-bool MarketData::fetch_daily_candles(const char* symbol, std::vector<Candle>& candles) {
+bool MarketData::fetch_daily_candles_http(const char* symbol, std::vector<Candle>& candles) {
     candles.clear();
 
     // Build URL: /ohlc?asset=SYMBOL&range=DAILY&datapoints=200
@@ -562,7 +862,7 @@ bool MarketData::fetch_daily_candles(const char* symbol, std::vector<Candle>& ca
     return !candles.empty();
 }
 
-bool MarketData::fetch_minute_candles(const char* symbol, int interval_secs, std::vector<Candle>& candles) {
+bool MarketData::fetch_minute_candles_http(const char* symbol, int interval_secs, std::vector<Candle>& candles) {
     candles.clear();
 
     // Build URL: /ohlc-intervals?asset=SYMBOL&interval=60&datapoints=200
@@ -574,7 +874,7 @@ bool MarketData::fetch_minute_candles(const char* symbol, int interval_secs, std
     HttpResponse resp = client.get(path);
 
     if (!resp.success) {
-        std::snprintf(m_error, sizeof(m_error), "API error fetching %d-sec candles: %s",
+        std::snprintf(m_error, sizeof(m_error), "HTTP API error fetching %d-sec candles: %s",
                      interval_secs, resp.error.c_str());
         return false;
     }

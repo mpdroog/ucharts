@@ -1,5 +1,6 @@
 // order_manager.cpp - Order execution and position management implementation
 #include "order_manager.h"
+#include "logger.h"
 #include <cstring>
 #include <ctime>
 #include <algorithm>
@@ -44,6 +45,9 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
 
     m_pending_orders.push_back(order);
 
+    LOG_I("orders", "BUY order created: id=%lld %s qty=%d @ %.2f",
+          static_cast<long long>(order.id), order.symbol, quantity, static_cast<double>(price));
+
     // Save to database
     if (m_db != nullptr && m_db->is_open()) {
         m_db->save_order(order);
@@ -64,6 +68,7 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
     // Check if we have enough position to sell
     Position* pos = find_position(symbol);
     if (pos == nullptr || pos->quantity < quantity) {
+        LOG_W("orders", "SELL rejected: %s qty=%d - insufficient position", symbol, quantity);
         return -1;  // Not enough shares to sell
     }
 
@@ -78,6 +83,9 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
     order.created_at = get_current_timestamp();
 
     m_pending_orders.push_back(order);
+
+    LOG_I("orders", "SELL order created: id=%lld %s qty=%d @ %.2f",
+          static_cast<long long>(order.id), order.symbol, quantity, static_cast<double>(price));
 
     // Save to database
     if (m_db != nullptr && m_db->is_open()) {
@@ -95,6 +103,9 @@ bool OrderManager::cancel_order(int64_t order_id) {
     for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
         if (it->id == order_id) {
             it->status = STATUS_CANCELLED;
+
+            LOG_I("orders", "Order CANCELLED: id=%lld %s",
+                  static_cast<long long>(it->id), it->symbol);
 
             // Update in database
             if (m_db != nullptr && m_db->is_open()) {
@@ -201,6 +212,9 @@ void OrderManager::process_fills() {
                 order.filled = order.quantity;
                 order.status = STATUS_FILLED;
 
+                LOG_I("orders", "BUY FILLED: id=%lld %s qty=%d @ %.2f",
+                      static_cast<long long>(order.id), order.symbol, fill_qty, static_cast<double>(order.price));
+
                 // Update position
                 update_position_on_buy(order.symbol, fill_qty, order.price);
                 filled = true;
@@ -211,6 +225,9 @@ void OrderManager::process_fills() {
                 int fill_qty = order.quantity - order.filled;
                 order.filled = order.quantity;
                 order.status = STATUS_FILLED;
+
+                LOG_I("orders", "SELL FILLED: id=%lld %s qty=%d @ %.2f",
+                      static_cast<long long>(order.id), order.symbol, fill_qty, static_cast<double>(order.price));
 
                 // Update position
                 update_position_on_sell(order.symbol, fill_qty, order.price);

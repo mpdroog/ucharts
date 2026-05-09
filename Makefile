@@ -78,7 +78,7 @@ CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 IMGUI_CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 
 # Main sources
-MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp
+MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
 MAIN_OBJS = $(MAIN_SRCS:.cpp=.o)
 
 TARGET = ucharts
@@ -110,7 +110,7 @@ check-deps:
 	fi
 
 # Test targets
-test: test_logic test_database test_market_data test_order_manager test_integration
+test: test_logic test_database test_market_data test_order_manager test_integration test_async_io
 	@echo "Running logic tests..."
 	./test_logic
 	@echo ""
@@ -126,6 +126,9 @@ test: test_logic test_database test_market_data test_order_manager test_integrat
 	@echo "Running integration tests..."
 	./test_integration
 	@echo ""
+	@echo "Running async I/O tests..."
+	./test_async_io
+	@echo ""
 	@echo "All tests passed!"
 
 test_logic: test_logic.cpp
@@ -134,17 +137,20 @@ test_logic: test_logic.cpp
 test_database: test_database.cpp database.cpp
 	$(CXX) $(TEST_CXXFLAGS) -o $@ test_database.cpp database.cpp $(TEST_LDFLAGS)
 
-test_market_data: test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
+test_market_data: test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
-test_order_manager: test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
+test_order_manager: test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
-test_integration: test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
+test_integration: test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+
+test_async_io: test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
+	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
 clean:
-	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_ucharts.db test_order_manager.db test_integration.db
+	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_ucharts.db test_order_manager.db test_integration.db
 
 clean-all: clean
 	rm -rf $(IMGUI_DIR)

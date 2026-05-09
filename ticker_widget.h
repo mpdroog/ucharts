@@ -25,6 +25,10 @@ public:
     void set_selected(bool selected);
     bool is_selected() const;
 
+    // Error display
+    void set_error(const char* msg);
+    void clear_error();
+
     // Order entry state
     void set_order_quantity(int qty);
     void set_order_price(float price);

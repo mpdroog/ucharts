@@ -1,6 +1,7 @@
 // ticker_widget.cpp - Ticker window implementation
 #include "ticker_widget.h"
 #include "chart_widget.h"  // For make_color helper
+#include "logger.h"
 #include <cstring>
 #include <cstdio>
 
@@ -51,6 +52,16 @@ void TickerWidget::set_selected(bool selected) {
 
 bool TickerWidget::is_selected() const {
     return m_selected;
+}
+
+void TickerWidget::set_error(const char* msg) {
+    if (msg != nullptr) {
+        safe_strcpy(m_error_msg, msg, sizeof(m_error_msg));
+    }
+}
+
+void TickerWidget::clear_error() {
+    m_error_msg[0] = '\0';
 }
 
 void TickerWidget::set_order_quantity(int qty) {
@@ -149,14 +160,29 @@ bool TickerWidget::render(ImVec2 size) {
                                  ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
                 // Enter pressed - validate and accept
                 if (validate_symbol(m_symbol_input)) {
-                    // Load the symbol data
+                    // Start async load of symbol data
+                    LOG_D("ticker", "Starting async load for symbol: %s", m_symbol_input);
+                    bool started = true;
                     if (m_market != nullptr) {
-                        m_market->load_symbol(m_symbol_input);
+                        started = m_market->load_symbol(m_symbol_input);
                     }
-                    safe_strcpy(m_symbol, m_symbol_input, sizeof(m_symbol));
-                    m_error_msg[0] = '\0';
-                    m_editing_symbol = false;
+                    if (started) {
+                        LOG_I("ticker", "Async load started for: %s", m_symbol_input);
+                        safe_strcpy(m_symbol, m_symbol_input, sizeof(m_symbol));
+                        m_error_msg[0] = '\0';
+                        m_editing_symbol = false;
+                    } else {
+                        // Failed to even start loading
+                        if (m_market != nullptr) {
+                            LOG_W("ticker", "Failed to start load for %s: %s", m_symbol_input, m_market->last_error());
+                            safe_strcpy(m_error_msg, m_market->last_error(), sizeof(m_error_msg));
+                        } else {
+                            LOG_W("ticker", "Failed to load %s: no market data", m_symbol_input);
+                            safe_strcpy(m_error_msg, "Failed to load", sizeof(m_error_msg));
+                        }
+                    }
                 } else {
+                    LOG_W("ticker", "Invalid symbol: %s", m_symbol_input);
                     safe_strcpy(m_error_msg, "Invalid symbol", sizeof(m_error_msg));
                 }
             }
@@ -186,7 +212,20 @@ bool TickerWidget::render(ImVec2 size) {
 
         ImGui::PopItemWidth();
 
-        // Show error message if any
+        // Show loading state or error message
+        if (m_market != nullptr && m_symbol[0] != '\0') {
+            MarketData::LoadingState state = m_market->get_loading_state(m_symbol);
+            if (state == MarketData::LOAD_PENDING) {
+                ImGui::PushStyleColor(ImGuiCol_Text, make_color(255, 255, 0, 255));
+                ImGui::TextUnformatted("Loading...");
+                ImGui::PopStyleColor();
+            } else if (state == MarketData::LOAD_ERROR) {
+                ImGui::PushStyleColor(ImGuiCol_Text, make_color(255, 100, 100, 255));
+                const char* err = m_market->get_loading_error(m_symbol);
+                ImGui::Text("Error: %s", err[0] != '\0' ? err : "Unknown error");
+                ImGui::PopStyleColor();
+            }
+        }
         if (m_error_msg[0] != '\0') {
             ImGui::PushStyleColor(ImGuiCol_Text, make_color(255, 100, 100, 255));
             ImGui::TextUnformatted(m_error_msg);
@@ -403,6 +442,7 @@ void TickerWidget::render_order_entry(float width) {
 
     if (ImGui::Button("BUY", ImVec2(button_width, button_height))) {
         if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && m_order_price > 0.0f) {
+            LOG_I("ticker", "BUY order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(m_order_price));
             m_order_mgr->buy(m_symbol, m_order_qty, m_order_price);
         }
     }
@@ -417,6 +457,7 @@ void TickerWidget::render_order_entry(float width) {
 
     if (ImGui::Button("SELL", ImVec2(button_width, button_height))) {
         if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && m_order_price > 0.0f) {
+            LOG_I("ticker", "SELL order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(m_order_price));
             m_order_mgr->sell(m_symbol, m_order_qty, m_order_price);
         }
     }

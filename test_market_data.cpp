@@ -159,6 +159,7 @@ static void cleanup_test_data() {
 
 TEST(has_symbol_empty) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     ASSERT_FALSE(md.has_symbol(nullptr));
@@ -168,6 +169,7 @@ TEST(has_symbol_empty) {
 
 TEST(has_symbol_exists) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     ASSERT_TRUE(md.has_symbol("TEST"));
@@ -175,6 +177,7 @@ TEST(has_symbol_exists) {
 
 TEST(load_symbol_nonexistent) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     ASSERT_FALSE(md.load_symbol("NONEXISTENT"));
@@ -182,6 +185,7 @@ TEST(load_symbol_nonexistent) {
 
 TEST(load_symbol_success) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     ASSERT_TRUE(md.load_symbol("TEST"));
@@ -189,6 +193,7 @@ TEST(load_symbol_success) {
 
 TEST(get_level2) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -216,6 +221,7 @@ TEST(get_level2) {
 
 TEST(get_level2_exchange_names) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -231,6 +237,7 @@ TEST(get_level2_exchange_names) {
 
 TEST(get_level2_sizes) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -246,6 +253,7 @@ TEST(get_level2_sizes) {
 
 TEST(get_level2_colors) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -262,6 +270,7 @@ TEST(get_level2_colors) {
 
 TEST(get_time_sales) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -273,6 +282,7 @@ TEST(get_time_sales) {
 
 TEST(time_sales_direction) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -288,6 +298,7 @@ TEST(time_sales_direction) {
 
 TEST(time_sales_prices) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -301,6 +312,7 @@ TEST(time_sales_prices) {
 
 TEST(time_sales_timestamps) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -313,6 +325,7 @@ TEST(time_sales_timestamps) {
 
 TEST(get_candles_daily) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -328,6 +341,7 @@ TEST(get_candles_daily) {
 
 TEST(get_candles_1m) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -339,6 +353,7 @@ TEST(get_candles_1m) {
 
 TEST(get_candles_5m) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -350,6 +365,7 @@ TEST(get_candles_5m) {
 
 TEST(get_candles_limit) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -363,6 +379,7 @@ TEST(get_candles_limit) {
 
 TEST(get_current_price) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -372,6 +389,7 @@ TEST(get_current_price) {
 
 TEST(unload_symbol) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -398,6 +416,7 @@ TEST(simulation_control) {
 
 TEST(empty_symbol_returns_false) {
     MarketData md;
+    md.set_data_source(SOURCE_FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     std::vector<Level2Entry> bids, asks;
@@ -410,6 +429,96 @@ TEST(empty_symbol_returns_false) {
 
     std::vector<Candle> candles;
     ASSERT_FALSE(md.get_candles("", TF_DAILY, candles));
+}
+
+// ============================================================================
+// IQFeed TCP format tests
+// ============================================================================
+
+// Test helper: parse IQFeed historical response format
+static bool test_parse_iqfeed_response(const char* response, std::vector<Candle>& candles) {
+    candles.clear();
+    const char* p = response;
+    const char* end = p + std::strlen(response);
+
+    while (p < end) {
+        const char* line_end = p;
+        while (line_end < end && *line_end != '\n') line_end++;
+
+        if (line_end > p) {
+            char msg_id[8] = "";
+            char ts[32] = "";
+            float high = 0, low = 0, open = 0, close = 0;
+            float volume = 0;
+
+            int parsed = std::sscanf(p, "%7[^,],%31[^,],%f,%f,%f,%f,%f",
+                                    msg_id, ts, &high, &low, &open, &close, &volume);
+
+            if (parsed >= 6 && std::strcmp(msg_id, "LH") == 0) {
+                Candle c;
+                safe_strcpy(c.timestamp, ts, sizeof(c.timestamp));
+                c.open = open;
+                c.high = high;
+                c.low = low;
+                c.close = close;
+                c.volume = volume;
+                candles.push_back(c);
+            }
+        }
+        p = line_end + 1;
+    }
+    return !candles.empty();
+}
+
+TEST(iqfeed_parse_daily_format) {
+    // Real IQFeed format: LH,DATE,HIGH,LOW,OPEN,CLOSE,VOLUME,OPENINTEREST
+    const char* response = "LH,2024-01-15,155.50,150.25,152.00,154.75,1000000,0,\n";
+
+    std::vector<Candle> candles;
+    ASSERT_TRUE(test_parse_iqfeed_response(response, candles));
+    ASSERT_EQ(candles.size(), 1u);
+
+    // Verify fields are mapped correctly
+    ASSERT_STREQ(candles[0].timestamp, "2024-01-15");
+    ASSERT_FLOAT_EQ(candles[0].high, 155.50f, 0.01f);   // HIGH is position 3
+    ASSERT_FLOAT_EQ(candles[0].low, 150.25f, 0.01f);    // LOW is position 4
+    ASSERT_FLOAT_EQ(candles[0].open, 152.00f, 0.01f);   // OPEN is position 5
+    ASSERT_FLOAT_EQ(candles[0].close, 154.75f, 0.01f);  // CLOSE is position 6
+    ASSERT_FLOAT_EQ(candles[0].volume, 1000000.0f, 1.0f);
+}
+
+TEST(iqfeed_parse_interval_format) {
+    // Real IQFeed interval format: LH,DATETIME,HIGH,LOW,OPEN,CLOSE,TOTALVOL,PERIODVOL,TRADES
+    const char* response = "LH,2024-05-10 09:30:00,184.76,184.50,184.55,184.70,32048,250,15,\n";
+
+    std::vector<Candle> candles;
+    ASSERT_TRUE(test_parse_iqfeed_response(response, candles));
+    ASSERT_EQ(candles.size(), 1u);
+
+    ASSERT_STREQ(candles[0].timestamp, "2024-05-10 09:30:00");
+    ASSERT_FLOAT_EQ(candles[0].high, 184.76f, 0.01f);
+    ASSERT_FLOAT_EQ(candles[0].low, 184.50f, 0.01f);
+    ASSERT_FLOAT_EQ(candles[0].open, 184.55f, 0.01f);
+    ASSERT_FLOAT_EQ(candles[0].close, 184.70f, 0.01f);
+}
+
+TEST(iqfeed_parse_multiple_candles) {
+    const char* response =
+        "LH,2024-01-15,155.50,150.25,152.00,154.75,1000000,0,\n"
+        "LH,2024-01-16,156.00,153.00,154.75,155.25,900000,0,\n"
+        "LH,2024-01-17,157.50,154.50,155.25,157.00,1100000,0,\n";
+
+    std::vector<Candle> candles;
+    ASSERT_TRUE(test_parse_iqfeed_response(response, candles));
+    ASSERT_EQ(candles.size(), 3u);
+
+    // First candle
+    ASSERT_FLOAT_EQ(candles[0].open, 152.00f, 0.01f);
+    ASSERT_FLOAT_EQ(candles[0].close, 154.75f, 0.01f);
+
+    // Last candle
+    ASSERT_FLOAT_EQ(candles[2].open, 155.25f, 0.01f);
+    ASSERT_FLOAT_EQ(candles[2].close, 157.00f, 0.01f);
 }
 
 // ============================================================================
@@ -442,8 +551,16 @@ int main() {
     RUN_TEST(simulation_control);
     RUN_TEST(empty_symbol_returns_false);
 
+    // IQFeed TCP format tests
+    RUN_TEST(iqfeed_parse_daily_format);
+    RUN_TEST(iqfeed_parse_interval_format);
+    RUN_TEST(iqfeed_parse_multiple_candles);
+
     cleanup_test_data();
 
     std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
-    return 0;
+
+    // Use _Exit to avoid static destruction order issues with global instances
+    std::fflush(stdout);
+    _Exit(0);
 }

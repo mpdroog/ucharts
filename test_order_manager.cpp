@@ -98,6 +98,7 @@ static void cleanup_test_data() {
 static void init_test_env() {
     unlink(TEST_DB);
     g_test_db.init(TEST_DB);
+    g_test_market.set_data_source(SOURCE_FILE);
     g_test_market.set_data_dir(TEST_DATA_DIR);
     g_test_market.load_symbol("TEST");
 }
@@ -414,6 +415,7 @@ TEST(persistence) {
         db.init(TEST_DB);
 
         MarketData market;
+        market.set_data_source(SOURCE_FILE);
         market.set_data_dir(TEST_DATA_DIR);
         market.load_symbol("TEST");
 
@@ -433,6 +435,7 @@ TEST(persistence) {
         db.init(TEST_DB);
 
         MarketData market;
+        market.set_data_source(SOURCE_FILE);
         market.set_data_dir(TEST_DATA_DIR);
         market.load_symbol("TEST");
 
@@ -481,5 +484,8 @@ int main() {
     cleanup_test_data();
 
     std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
-    return 0;
+
+    // Use _Exit to avoid static destruction order issues with global instances
+    std::fflush(stdout);
+    _Exit(0);
 }

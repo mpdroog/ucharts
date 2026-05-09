@@ -167,6 +167,7 @@ TEST(market_data_and_order_manager_integration) {
     OrderManager order_mgr;
 
     ASSERT(db.init(TEST_DB));
+    market.set_data_source(SOURCE_FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
@@ -205,6 +206,7 @@ TEST(full_trading_workflow) {
     OrderManager order_mgr;
 
     ASSERT(db.init(TEST_DB));
+    market.set_data_source(SOURCE_FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
@@ -325,6 +327,7 @@ TEST(session_persistence) {
 
 TEST(market_data_candles_all_timeframes) {
     MarketData market;
+    market.set_data_source(SOURCE_FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
 
@@ -352,6 +355,7 @@ TEST(calculate_sell_quantity_percentages) {
     OrderManager order_mgr;
 
     ASSERT(db.init(TEST_DB));
+    market.set_data_source(SOURCE_FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
@@ -407,6 +411,7 @@ TEST(position_pnl_calculation) {
     OrderManager order_mgr;
 
     ASSERT(db.init(TEST_DB));
+    market.set_data_source(SOURCE_FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
@@ -439,6 +444,7 @@ TEST(position_pnl_calculation) {
 
 TEST(time_sales_direction) {
     MarketData market;
+    market.set_data_source(SOURCE_FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
 
@@ -455,6 +461,7 @@ TEST(time_sales_direction) {
 
 TEST(level2_ordering) {
     MarketData market;
+    market.set_data_source(SOURCE_FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
 
@@ -522,5 +529,7 @@ int main() {
 
     printf("\n%d/%d integration tests passed.\n", g_tests_passed, g_tests_run);
 
-    return (g_tests_passed == g_tests_run) ? 0 : 1;
+    // Use _Exit to avoid static destruction order issues with global instances
+    fflush(stdout);
+    _Exit((g_tests_passed == g_tests_run) ? 0 : 1);
 }
