@@ -783,6 +783,17 @@ void MarketData::on_lookup_result(const LookupResult& result) {
             data.candles_5m = result.candles;
         }
     } else {
+        // Log which timeframe failed
+        const char* tf_name = "unknown";
+        if (result.type == LookupRequestType::DAILY) {
+            tf_name = "daily";
+        } else if (result.interval_secs == 60) {
+            tf_name = "1-min";
+        } else if (result.interval_secs == 300) {
+            tf_name = "5-min";
+        }
+        LOG_W("market", "Failed to load %s %s: %s", sym.c_str(), tf_name, result.error);
+
         // Store first error
         if (data.load_error[0] == '\0') {
             safe_strcpy(data.load_error, result.error, sizeof(data.load_error));

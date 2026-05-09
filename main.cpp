@@ -199,11 +199,35 @@ static void update_charts_for_selected_ticker() {
     (void)get_market_data().get_candles(symbol, Timeframe::M5, candles_5m, MAX_CANDLES);
     (void)get_market_data().get_candles(symbol, Timeframe::DAILY, candles_daily, MAX_CANDLES);
 
-    // Warn if symbol is loaded but no data available (helps catch bugs)
+    // Log data availability issues (helps catch bugs early)
+    // Use static to only log once per symbol to avoid spam
+    static char s_last_warned_symbol[MAX_SYMBOL_LEN] = "";
+    static MarketData::LoadingState s_last_warned_state = MarketData::LoadingState::IDLE;
+
     auto load_state = get_market_data().get_loading_state(symbol);
-    if (load_state == MarketData::LoadingState::COMPLETE &&
-        candles_1m.empty() && candles_5m.empty() && candles_daily.empty()) {
-        LOG_W("main", "Symbol '%s' marked COMPLETE but no candle data available!", symbol);
+    bool state_changed = (std::strcmp(s_last_warned_symbol, symbol) != 0 ||
+                          s_last_warned_state != load_state);
+
+    if (state_changed) {
+        if (load_state == MarketData::LoadingState::ERROR) {
+            LOG_E("main", "Symbol '%s' failed to load: %s",
+                  symbol, get_market_data().get_loading_error(symbol));
+        } else if (load_state == MarketData::LoadingState::COMPLETE) {
+            if (candles_1m.empty() && candles_5m.empty() && candles_daily.empty()) {
+                LOG_W("main", "Symbol '%s' COMPLETE but no candle data available!", symbol);
+            } else {
+                // Log which timeframes are missing (useful for debugging IQFeed issues)
+                if (candles_1m.empty() || candles_5m.empty() || candles_daily.empty()) {
+                    LOG_D("main", "Symbol '%s' partial data: 1m=%zu 5m=%zu daily=%zu",
+                          symbol, candles_1m.size(), candles_5m.size(), candles_daily.size());
+                }
+            }
+        } else if (load_state == MarketData::LoadingState::IDLE) {
+            LOG_W("main", "Symbol '%s' selected but not loading (state=IDLE)", symbol);
+        }
+
+        safe_strcpy(s_last_warned_symbol, symbol, sizeof(s_last_warned_symbol));
+        s_last_warned_state = load_state;
     }
 
     // Update charts
