@@ -197,11 +197,11 @@ bool IQFeedLookup::set_protocol() {
     std::string line;
     int attempts = 0;
     while (attempts < 10 && read_line(m_socket, line, 5000)) {
-        LOG_D("iqfeed", "Protocol response: %s", line.c_str());
         if (line.find("CURRENT PROTOCOL") != std::string::npos) {
             LOG_I("iqfeed", "Protocol set: %s", line.c_str());
             return true;
         }
+        LOG_W("iqfeed", "Lookup: Unexpected protocol response[%d]: %s", attempts, line.c_str());
         attempts++;
     }
 
@@ -523,12 +523,19 @@ bool IQFeedLevel1::set_protocol() {
         return false;
     }
 
-    // Read initial messages until we see CURRENT PROTOCOL
+    // Read initial messages until we see CURRENT PROTOCOL or SERVER CONNECTED
     std::string line;
     int attempts = 0;
     while (attempts < 10 && read_line(m_socket, line, 2000)) {
-        if (line.find("CURRENT PROTOCOL") != std::string::npos) {
+        if (line.find("CURRENT PROTOCOL") != std::string::npos ||
+            line.find("SERVER CONNECTED") != std::string::npos) {
             return true;
+        }
+        // S,KEY, S,IP, S,CUST are normal IQFeed init messages - not warnings
+        if (line.find("S,KEY") == std::string::npos &&
+            line.find("S,IP") == std::string::npos &&
+            line.find("S,CUST") == std::string::npos) {
+            LOG_W("iqfeed", "L1: Unexpected protocol response[%d]: %s", attempts, line.c_str());
         }
         attempts++;
     }
@@ -755,6 +762,7 @@ bool IQFeedLevel2::set_protocol() {
             line.find("SERVER CONNECTED") != std::string::npos) {
             return true;
         }
+        LOG_W("iqfeed", "L2: Unexpected protocol response[%d]: %s", attempts, line.c_str());
         attempts++;
     }
 
