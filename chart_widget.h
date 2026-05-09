@@ -93,6 +93,9 @@ private:
     std::vector<float> m_ema_values;
     std::vector<float> m_boll_upper;
     std::vector<float> m_boll_lower;
+    std::vector<float> m_vwap_values;        // VWAP line
+    std::vector<float> m_cumulative_delta;   // Cumulative delta values
+    std::vector<float> m_auto_ma_values;     // Auto-selected MA values
     bool m_indicators_dirty;  // Set when candles/settings change
     std::string m_symbol;     // Current symbol being displayed
 
@@ -108,6 +111,10 @@ private:
     void calculate_sma(int period);
     void calculate_ema(int period);
     void calculate_bollinger(int period, float mult);
+    void calculate_vwap();
+    void calculate_cumulative_delta();
+    void calculate_auto_ma();
+    float calculate_ma_error(const std::vector<float>& ma_values);
 
     void draw_dashed_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 color, float thickness, float dash_size);
     void draw_styled_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 color, float thickness, LineStyle style);

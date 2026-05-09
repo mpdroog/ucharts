@@ -86,6 +86,12 @@ public:
     // Unload symbol data
     void unload_symbol(const char* symbol);
 
+    // Force reload symbol data (clears cache and re-fetches)
+    [[nodiscard]] bool reload_symbol(const char* symbol);
+
+    // Check if a specific timeframe has data
+    [[nodiscard]] bool has_timeframe_data(const char* symbol, Timeframe tf) const;
+
     // Get current Level 2 book (aggregated, 10 levels per side)
     [[nodiscard]] bool get_level2(const char* symbol, std::vector<Level2Entry>& bids,
                     std::vector<Level2Entry>& asks, float& best_bid, float& best_ask);

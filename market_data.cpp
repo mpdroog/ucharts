@@ -263,7 +263,8 @@ void MarketData::update_l1_quote(const char* symbol) {
             if (quote.last > last_1m.high) last_1m.high = quote.last;
             if (quote.last < last_1m.low) last_1m.low = quote.last;
             last_1m.close = quote.last;
-            // Volume is cumulative from L1, we can't easily get period volume
+            // Accumulate volume from trade size
+            last_1m.volume += static_cast<float>(quote.last_size);
         } else {
             // New candle period - create new candle
             Candle new_candle;
@@ -272,7 +273,7 @@ void MarketData::update_l1_quote(const char* symbol) {
             new_candle.high = quote.last;
             new_candle.low = quote.last;
             new_candle.close = quote.last;
-            new_candle.volume = 0;
+            new_candle.volume = static_cast<float>(quote.last_size);
             data.candles_1m.push_back(new_candle);
 
             // Keep candles limited to MAX_CANDLES
@@ -290,6 +291,8 @@ void MarketData::update_l1_quote(const char* symbol) {
             if (quote.last > last_5m.high) last_5m.high = quote.last;
             if (quote.last < last_5m.low) last_5m.low = quote.last;
             last_5m.close = quote.last;
+            // Accumulate volume from trade size
+            last_5m.volume += static_cast<float>(quote.last_size);
         } else {
             // New candle period - create new candle
             Candle new_candle;
@@ -298,7 +301,7 @@ void MarketData::update_l1_quote(const char* symbol) {
             new_candle.high = quote.last;
             new_candle.low = quote.last;
             new_candle.close = quote.last;
-            new_candle.volume = 0;
+            new_candle.volume = static_cast<float>(quote.last_size);
             data.candles_5m.push_back(new_candle);
 
             // Keep candles limited to MAX_CANDLES
@@ -477,7 +480,44 @@ bool MarketData::load_symbol(const char* symbol) {
 
 void MarketData::unload_symbol(const char* symbol) {
     if (symbol == nullptr) return;
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_symbols.erase(normalize_symbol(symbol));
+}
+
+bool MarketData::reload_symbol(const char* symbol) {
+    if (symbol == nullptr || symbol[0] == '\0') return false;
+
+    std::string sym = normalize_symbol(symbol);
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_symbols.find(sym);
+        if (it != m_symbols.end()) {
+            // Reset state to allow reload
+            it->second.loaded = false;
+            it->second.loading_state = LoadingState::IDLE;
+            it->second.pending_requests = 0;
+            it->second.load_error[0] = '\0';
+        }
+    }
+
+    return load_symbol(symbol);
+}
+
+bool MarketData::has_timeframe_data(const char* symbol, Timeframe tf) const {
+    if (symbol == nullptr || symbol[0] == '\0') return false;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_symbols.find(normalize_symbol(symbol));
+    if (it == m_symbols.end() || !it->second.loaded) return false;
+
+    const SymbolData& data = it->second;
+    switch (tf) {
+        case Timeframe::M1: return !data.candles_1m.empty();
+        case Timeframe::M5: return !data.candles_5m.empty();
+        case Timeframe::DAILY: return !data.candles_daily.empty();
+    }
+    return false;
 }
 
 ImU32 MarketData::get_level_color(int level_index, bool is_bid) {
@@ -818,29 +858,48 @@ bool MarketData::parse_candles_csv(const char* filepath, std::vector<Candle>& ca
 bool MarketData::load_symbol_from_tcp(const char* symbol) {
     std::string sym = normalize_symbol(symbol);
 
+    bool need_daily = true;
+    bool need_1m = true;
+    bool need_5m = true;
+
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         SymbolData& data = m_symbols[sym];
 
-        // Already loading or loaded?
+        // Already loading?
         if (data.loading_state == LoadingState::PENDING) {
             return true;  // Already loading
         }
+
+        // Check which timeframes we already have
         if (data.loaded && data.loading_state == LoadingState::COMPLETE) {
-            return true;  // Already loaded
+            need_daily = data.candles_daily.empty();
+            need_1m = data.candles_1m.empty();
+            need_5m = data.candles_5m.empty();
+
+            // If we have all data, nothing to do
+            if (!need_daily && !need_1m && !need_5m) {
+                return true;
+            }
+
+            // Retry missing timeframes
+            LOG_I("market", "Retrying missing timeframes for %s: daily=%d 1m=%d 5m=%d",
+                  sym.c_str(), need_daily ? 1 : 0, need_1m ? 1 : 0, need_5m ? 1 : 0);
+        } else {
+            // Fresh load - clear everything
+            data.level2_bids.clear();
+            data.level2_asks.clear();
+            data.time_sales.clear();
+            data.candles_1m.clear();
+            data.candles_5m.clear();
+            data.candles_daily.clear();
         }
 
-        // Reset state for new load
+        // Set state for loading
         data.loaded = false;
         data.loading_state = LoadingState::PENDING;
-        data.pending_requests = 3;  // daily + 1min + 5min
+        data.pending_requests = (need_daily ? 1 : 0) + (need_1m ? 1 : 0) + (need_5m ? 1 : 0);
         data.load_error[0] = '\0';
-        data.level2_bids.clear();
-        data.level2_asks.clear();
-        data.time_sales.clear();
-        data.candles_1m.clear();
-        data.candles_5m.clear();
-        data.candles_daily.clear();
     }
 
     // Get lookup client and set up callback (connects on first use)
@@ -864,12 +923,17 @@ bool MarketData::load_symbol_from_tcp(const char* symbol) {
     }
 
     // Queue async fetch requests (returns immediately)
-    char* sym_copy = new char[sym.size() + 1];
-    safe_strcpy(sym_copy, sym.c_str(), sym.size() + 1);
-
-    lookup.fetch_daily(symbol, MAX_CANDLES, sym_copy);
-    lookup.fetch_interval(symbol, 60, MAX_CANDLES, sym_copy);
-    lookup.fetch_interval(symbol, 300, MAX_CANDLES, sym_copy);
+    // Note: user_data not needed - we use result.symbol to identify the symbol
+    // Only fetch missing timeframes
+    if (need_daily) {
+        lookup.fetch_daily(symbol, MAX_CANDLES, nullptr);
+    }
+    if (need_1m) {
+        lookup.fetch_interval(symbol, 60, MAX_CANDLES, nullptr);
+    }
+    if (need_5m) {
+        lookup.fetch_interval(symbol, 300, MAX_CANDLES, nullptr);
+    }
 
     // Note: L1/L2 subscription happens in on_lookup_result when data arrives
     // to avoid blocking the UI thread
@@ -963,11 +1027,6 @@ void MarketData::on_lookup_result(const LookupResult& result) {
                 LOG_E("market", "Symbol %s load failed: %s", sym.c_str(), data.load_error);
             }
 
-            // Clean up user_data (symbol string we allocated)
-            // Note: user_data is same for all 3 requests, only delete once
-            if (result.user_data != nullptr) {
-                delete[] static_cast<char*>(result.user_data);
-            }
         }
     }  // lock released here
 

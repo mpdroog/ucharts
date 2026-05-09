@@ -124,6 +124,9 @@ void ChartWidget::recalculate_indicators() {
     m_ema_values.clear();
     m_boll_upper.clear();
     m_boll_lower.clear();
+    m_vwap_values.clear();
+    m_cumulative_delta.clear();
+    m_auto_ma_values.clear();
 
     if (m_settings == nullptr || m_candles.empty()) return;
 
@@ -135,6 +138,15 @@ void ChartWidget::recalculate_indicators() {
     }
     if (m_settings->boll_enabled) {
         calculate_bollinger(m_settings->boll_period, 2.0f);
+    }
+    if (m_settings->vwap_enabled && m_timeframe != Timeframe::DAILY) {
+        calculate_vwap();
+    }
+    if (m_settings->cumulative_delta_enabled && m_timeframe != Timeframe::DAILY) {
+        calculate_cumulative_delta();
+    }
+    if (m_settings->auto_ma_enabled && m_timeframe != Timeframe::DAILY) {
+        calculate_auto_ma();
     }
 }
 
@@ -197,6 +209,191 @@ void ChartWidget::calculate_bollinger(int period, float mult) {
         float stddev = std::sqrt(sum_sq / static_cast<float>(period));
         m_boll_upper[i] = sma[i] + mult * stddev;
         m_boll_lower[i] = sma[i] - mult * stddev;
+    }
+}
+
+void ChartWidget::calculate_vwap() {
+    m_vwap_values.resize(m_candles.size(), 0.0f);
+
+    if (m_candles.empty()) return;
+
+    // VWAP = cumsum(typical_price * volume) / cumsum(volume)
+    // Typical price = (high + low + close) / 3
+    // Resets at start of day (detect date change)
+
+    float cum_tp_vol = 0.0f;
+    float cum_vol = 0.0f;
+    std::string current_date;
+
+    for (size_t i = 0; i < m_candles.size(); i++) {
+        const Candle& c = m_candles[i];
+
+        // Extract date from timestamp (YYYY-MM-DD or just first 10 chars)
+        // Handle short timestamps safely
+        std::string ts(c.timestamp);
+        std::string date = (ts.length() >= 10) ? ts.substr(0, 10) : ts;
+
+        // Reset VWAP at new day
+        if (date != current_date) {
+            cum_tp_vol = 0.0f;
+            cum_vol = 0.0f;
+            current_date = date;
+        }
+
+        float typical_price = (c.high + c.low + c.close) / 3.0f;
+        float vol = c.volume > 0 ? c.volume : 1.0f;  // Avoid div by zero
+
+        cum_tp_vol += typical_price * vol;
+        cum_vol += vol;
+
+        if (cum_vol > 0.0f) {
+            m_vwap_values[i] = cum_tp_vol / cum_vol;
+        } else {
+            m_vwap_values[i] = typical_price;
+        }
+    }
+}
+
+void ChartWidget::calculate_cumulative_delta() {
+    m_cumulative_delta.resize(m_candles.size(), 0.0f);
+
+    if (m_candles.empty()) return;
+
+    // Cumulative delta estimates buy/sell pressure from candle data
+    // Delta per candle = volume * (close - open) / (high - low)
+    // This approximates whether buyers or sellers dominated
+    // Positive delta = buyers dominated, negative = sellers dominated
+
+    float cum_delta = 0.0f;
+    std::string current_date;
+
+    for (size_t i = 0; i < m_candles.size(); i++) {
+        const Candle& c = m_candles[i];
+
+        // Extract date for daily reset (handle short timestamps safely)
+        std::string ts(c.timestamp);
+        std::string date = (ts.length() >= 10) ? ts.substr(0, 10) : ts;
+
+        // Reset cumulative delta at new day
+        if (date != current_date) {
+            cum_delta = 0.0f;
+            current_date = date;
+        }
+
+        float range = c.high - c.low;
+        if (range < 0.001f) range = 0.001f;  // Avoid div by zero
+
+        // Calculate delta: volume weighted by candle direction
+        // Close at top of range = all buying, close at bottom = all selling
+        float close_position = (c.close - c.low) / range;  // 0 to 1
+        float delta = c.volume * (2.0f * close_position - 1.0f);  // -volume to +volume
+
+        cum_delta += delta;
+        m_cumulative_delta[i] = cum_delta;
+    }
+}
+
+float ChartWidget::calculate_ma_error(const std::vector<float>& ma_values) {
+    // Calculate mean squared error between MA and close prices
+    // Lower error = MA follows price more closely
+    float sum_sq_error = 0.0f;
+    int count = 0;
+
+    for (size_t i = 0; i < m_candles.size() && i < ma_values.size(); i++) {
+        if (ma_values[i] > 0.0f) {
+            float diff = m_candles[i].close - ma_values[i];
+            sum_sq_error += diff * diff;
+            count++;
+        }
+    }
+
+    return (count > 0) ? (sum_sq_error / static_cast<float>(count)) : 999999.0f;
+}
+
+void ChartWidget::calculate_auto_ma() {
+    m_auto_ma_values.clear();
+
+    if (m_candles.empty() || m_settings == nullptr) return;
+
+    // Calculate all 4 MA types and find which one has lowest error
+    std::vector<float> ema9, sma9, ema21, sma21;
+
+    // Calculate EMA9
+    ema9.resize(m_candles.size(), 0.0f);
+    {
+        float k = 2.0f / 10.0f;  // period 9
+        float sum = 0.0f;
+        for (int i = 0; i < 9 && i < static_cast<int>(m_candles.size()); i++) {
+            sum += m_candles[static_cast<size_t>(i)].close;
+        }
+        if (m_candles.size() >= 9) {
+            ema9[8] = sum / 9.0f;
+            for (size_t i = 9; i < m_candles.size(); i++) {
+                ema9[i] = m_candles[i].close * k + ema9[i - 1] * (1.0f - k);
+            }
+        }
+    }
+
+    // Calculate SMA9
+    sma9.resize(m_candles.size(), 0.0f);
+    for (size_t i = 8; i < m_candles.size(); i++) {
+        float sum = 0.0f;
+        for (int j = 0; j < 9; j++) {
+            sum += m_candles[i - static_cast<size_t>(j)].close;
+        }
+        sma9[i] = sum / 9.0f;
+    }
+
+    // Calculate EMA21
+    ema21.resize(m_candles.size(), 0.0f);
+    {
+        float k = 2.0f / 22.0f;  // period 21
+        float sum = 0.0f;
+        for (int i = 0; i < 21 && i < static_cast<int>(m_candles.size()); i++) {
+            sum += m_candles[static_cast<size_t>(i)].close;
+        }
+        if (m_candles.size() >= 21) {
+            ema21[20] = sum / 21.0f;
+            for (size_t i = 21; i < m_candles.size(); i++) {
+                ema21[i] = m_candles[i].close * k + ema21[i - 1] * (1.0f - k);
+            }
+        }
+    }
+
+    // Calculate SMA21
+    sma21.resize(m_candles.size(), 0.0f);
+    for (size_t i = 20; i < m_candles.size(); i++) {
+        float sum = 0.0f;
+        for (int j = 0; j < 21; j++) {
+            sum += m_candles[i - static_cast<size_t>(j)].close;
+        }
+        sma21[i] = sum / 21.0f;
+    }
+
+    // Calculate error for each
+    float err_ema9 = calculate_ma_error(ema9);
+    float err_sma9 = calculate_ma_error(sma9);
+    float err_ema21 = calculate_ma_error(ema21);
+    float err_sma21 = calculate_ma_error(sma21);
+
+    // Find minimum error and select that MA
+    float min_error = err_ema9;
+    m_settings->auto_ma_type = AutoMAType::EMA9;
+    m_auto_ma_values = ema9;
+
+    if (err_sma9 < min_error) {
+        min_error = err_sma9;
+        m_settings->auto_ma_type = AutoMAType::SMA9;
+        m_auto_ma_values = sma9;
+    }
+    if (err_ema21 < min_error) {
+        min_error = err_ema21;
+        m_settings->auto_ma_type = AutoMAType::EMA21;
+        m_auto_ma_values = ema21;
+    }
+    if (err_sma21 < min_error) {
+        m_settings->auto_ma_type = AutoMAType::SMA21;
+        m_auto_ma_values = sma21;
     }
 }
 
@@ -378,10 +575,17 @@ bool ChartWidget::render(ImVec2 size) {
     float volume_height = 0.0f;
     bool show_volume = m_settings && m_settings->volume_enabled && !m_candles.empty() && m_candles[0].volume > 0;
     if (show_volume) {
-        volume_height = canvas_size.y * 0.15f;
+        volume_height = canvas_size.y * 0.12f;
     }
 
-    float main_chart_height = canvas_size.y - time_axis_height - volume_height - title_height;
+    // Calculate cumulative delta panel height
+    float delta_height = 0.0f;
+    bool show_delta = m_settings && m_settings->cumulative_delta_enabled && !m_cumulative_delta.empty();
+    if (show_delta) {
+        delta_height = canvas_size.y * 0.12f;
+    }
+
+    float main_chart_height = canvas_size.y - time_axis_height - volume_height - delta_height - title_height;
 
     // Draw background
     draw_list->AddRectFilled(canvas_pos,
@@ -465,6 +669,26 @@ bool ChartWidget::render(ImVec2 size) {
             }
         }
     }
+    // Include VWAP in price range
+    if (m_settings && m_settings->vwap_enabled && !m_vwap_values.empty()) {
+        for (int i = start_idx; i < end_idx; i++) {
+            float v = m_vwap_values[static_cast<size_t>(i)];
+            if (v > 0) {
+                if (v < min_price) min_price = v;
+                if (v > max_price) max_price = v;
+            }
+        }
+    }
+    // Include auto-MA in price range
+    if (m_settings && m_settings->auto_ma_enabled && !m_auto_ma_values.empty()) {
+        for (int i = start_idx; i < end_idx; i++) {
+            float v = m_auto_ma_values[static_cast<size_t>(i)];
+            if (v > 0) {
+                if (v < min_price) min_price = v;
+                if (v > max_price) max_price = v;
+            }
+        }
+    }
 
     // Include current price in range so the price line is always visible
     if (m_current_price > 0.0f) {
@@ -472,10 +696,13 @@ bool ChartWidget::render(ImVec2 size) {
         if (m_current_price > max_price) max_price = m_current_price;
     }
 
-    // Include auto S/R levels in price range so they're always visible
-    for (const auto& sr : m_auto_sr_levels) {
-        if (sr.price < min_price) min_price = sr.price;
-        if (sr.price > max_price) max_price = sr.price;
+    // Include auto S/R levels in price range only on daily chart
+    // On intraday charts, S/R lines only show if naturally in view
+    if (m_timeframe == Timeframe::DAILY) {
+        for (const auto& sr : m_auto_sr_levels) {
+            if (sr.price < min_price) min_price = sr.price;
+            if (sr.price > max_price) max_price = sr.price;
+        }
     }
 
     // Add padding to price range
@@ -569,18 +796,48 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
-    // Draw grid
+    // Draw price scale background (right side panel)
+    float scale_x = chart_pos.x + canvas_size.x - padding_right;
+    draw_list->AddRectFilled(
+        ImVec2(scale_x, chart_pos.y + padding_top),
+        ImVec2(chart_pos.x + canvas_size.x, chart_pos.y + main_chart_height),
+        make_color(25, 25, 30));
+    draw_list->AddLine(
+        ImVec2(scale_x, chart_pos.y + padding_top),
+        ImVec2(scale_x, chart_pos.y + main_chart_height),
+        make_color(50, 50, 55));
+
+    // Determine decimal places based on price magnitude
+    int decimals = 2;
+    if (max_price >= 1000.0f) decimals = 0;
+    else if (max_price >= 100.0f) decimals = 1;
+    else if (max_price < 1.0f) decimals = 4;
+
+    // Draw grid lines and price labels (simple 6 divisions)
     for (int i = 0; i <= 5; i++) {
         float price = min_price + (price_range * static_cast<float>(i) / 5.0f);
         float y = priceToY(price);
+
+        // Grid line
         draw_list->AddLine(
             ImVec2(chart_pos.x + padding_left, y),
-            ImVec2(chart_pos.x + canvas_size.x - padding_right, y),
+            ImVec2(scale_x, y),
             make_color(40, 40, 45));
 
+        // Tick mark on scale
+        draw_list->AddLine(
+            ImVec2(scale_x, y),
+            ImVec2(scale_x + 4, y),
+            make_color(80, 80, 85));
+
+        // Price label
         char label[32];
-        std::snprintf(label, sizeof(label), "%.2f", static_cast<double>(price));
-        draw_list->AddText(ImVec2(chart_pos.x + canvas_size.x - padding_right + 5, y - 6), make_color(120, 120, 120), label);
+        if (decimals == 0) std::snprintf(label, sizeof(label), "%.0f", static_cast<double>(price));
+        else if (decimals == 1) std::snprintf(label, sizeof(label), "%.1f", static_cast<double>(price));
+        else if (decimals == 4) std::snprintf(label, sizeof(label), "%.4f", static_cast<double>(price));
+        else std::snprintf(label, sizeof(label), "%.2f", static_cast<double>(price));
+
+        draw_list->AddText(ImVec2(scale_x + 6, y - 6), make_color(140, 140, 145), label);
     }
 
     // Draw extended hours background shading (pre-market and after-hours)
@@ -674,7 +931,49 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
-    // Draw candles
+    // Draw VWAP (purple/magenta line)
+    if (m_settings && m_settings->vwap_enabled && !m_vwap_values.empty()) {
+        for (int i = start_idx + 1; i < end_idx; i++) {
+            float v1 = m_vwap_values[static_cast<size_t>(i - 1)];
+            float v2 = m_vwap_values[static_cast<size_t>(i)];
+            if (v1 > 0 && v2 > 0) {
+                draw_list->AddLine(
+                    ImVec2(candleToX(static_cast<float>(i - 1)), priceToY(v1)),
+                    ImVec2(candleToX(static_cast<float>(i)), priceToY(v2)),
+                    make_color(200, 100, 255), 2.0f);  // Purple
+            }
+        }
+    }
+
+    // Draw auto-selected MA (yellow line with label)
+    if (m_settings && m_settings->auto_ma_enabled && !m_auto_ma_values.empty()) {
+        for (int i = start_idx + 1; i < end_idx; i++) {
+            float v1 = m_auto_ma_values[static_cast<size_t>(i - 1)];
+            float v2 = m_auto_ma_values[static_cast<size_t>(i)];
+            if (v1 > 0 && v2 > 0) {
+                draw_list->AddLine(
+                    ImVec2(candleToX(static_cast<float>(i - 1)), priceToY(v1)),
+                    ImVec2(candleToX(static_cast<float>(i)), priceToY(v2)),
+                    make_color(255, 200, 50), 1.5f);  // Gold/yellow
+            }
+        }
+        // Draw MA type label in top-right
+        const char* ma_label = "";
+        switch (m_settings->auto_ma_type) {
+            case AutoMAType::NONE: break;
+            case AutoMAType::EMA9: ma_label = "EMA9"; break;
+            case AutoMAType::SMA9: ma_label = "SMA9"; break;
+            case AutoMAType::EMA21: ma_label = "EMA21"; break;
+            case AutoMAType::SMA21: ma_label = "SMA21"; break;
+        }
+        if (ma_label[0] != '\0') {
+            draw_list->AddText(
+                ImVec2(chart_pos.x + canvas_size.x - padding_right - 50, chart_pos.y + padding_top + 5),
+                make_color(255, 200, 50), ma_label);
+        }
+    }
+
+    // Draw candles (TradingView style: hollow bullish, filled bearish)
     for (int i = start_idx; i < end_idx; i++) {
         const Candle& c = m_candles[static_cast<size_t>(i)];
         float x = candleToX(static_cast<float>(i));
@@ -689,47 +988,76 @@ bool ChartWidget::render(ImVec2 size) {
         bool bullish = c.close >= c.open;
         ImU32 color = bullish ? make_color(38, 166, 91) : make_color(214, 69, 65);
 
+        // Draw wick
         draw_list->AddLine(ImVec2(x, high_y), ImVec2(x, low_y), color, 1.0f);
 
         float body_top = bullish ? close_y : open_y;
         float body_bottom = bullish ? open_y : close_y;
 
         if (body_bottom - body_top < 1.0f) {
+            // Doji - draw horizontal line
             draw_list->AddLine(ImVec2(x - body_width / 2, open_y), ImVec2(x + body_width / 2, open_y), color, 2.0f);
+        } else if (bullish) {
+            // Hollow bullish candle - outline only with dark fill
+            draw_list->AddRectFilled(ImVec2(x - body_width / 2, body_top), ImVec2(x + body_width / 2, body_bottom), make_color(20, 20, 25));
+            draw_list->AddRect(ImVec2(x - body_width / 2, body_top), ImVec2(x + body_width / 2, body_bottom), color, 0.0f, 0, 1.5f);
         } else {
+            // Filled bearish candle
             draw_list->AddRectFilled(ImVec2(x - body_width / 2, body_top), ImVec2(x + body_width / 2, body_bottom), color);
         }
     }
 
-    // Draw current price line (use m_current_price if set, otherwise fall back to last candle)
-    float current_price = (m_current_price > 0.0f) ? m_current_price : m_candles.back().close;
-    float price_y = priceToY(current_price);
+    // Draw current price line (only on daily chart to avoid clutter on intraday)
+    if (m_timeframe == Timeframe::DAILY && !m_candles.empty()) {
+        float current_price = (m_current_price > 0.0f) ? m_current_price : m_candles.back().close;
+        float price_y = priceToY(current_price);
 
-    // Clamp Y position to chart bounds for the label
-    float label_y = price_y;
-    float min_y = chart_pos.y + padding_top;
-    float max_y = chart_pos.y + main_chart_height - padding_top;
-    bool price_in_range = (price_y >= min_y && price_y <= max_y);
+        // Determine if current candle is bullish or bearish for color
+        bool last_bullish = m_candles.back().close >= m_candles.back().open;
+        ImU32 price_color = last_bullish ? make_color(38, 166, 91) : make_color(214, 69, 65);
 
-    if (price_in_range) {
-        // Draw price line if in visible range
-        draw_dashed_line(draw_list,
-            ImVec2(chart_pos.x + padding_left, price_y),
-            ImVec2(chart_pos.x + canvas_size.x - padding_right, price_y),
-            make_color(50, 150, 255), 1.0f, 4.0f);
-    } else {
-        // Clamp label position to edge of chart
-        label_y = (price_y < min_y) ? min_y : max_y;
+        // Clamp Y position to chart bounds for the label
+        float label_y = price_y;
+        float min_y = chart_pos.y + padding_top;
+        float max_y = chart_pos.y + main_chart_height - padding_top;
+        bool price_in_range = (price_y >= min_y && price_y <= max_y);
+
+        if (price_in_range) {
+            // Draw price line if in visible range
+            draw_dashed_line(draw_list,
+                ImVec2(chart_pos.x + padding_left, price_y),
+                ImVec2(scale_x, price_y),
+                price_color, 1.0f, 4.0f);
+        } else {
+            // Clamp label position to edge of chart
+            label_y = (price_y < min_y) ? min_y : max_y;
+        }
+
+        // Draw current price label box (TradingView style - prominent, colored)
+        char price_label[32];
+        if (decimals == 0) std::snprintf(price_label, sizeof(price_label), "%.0f", static_cast<double>(current_price));
+        else if (decimals == 1) std::snprintf(price_label, sizeof(price_label), "%.1f", static_cast<double>(current_price));
+        else if (decimals == 4) std::snprintf(price_label, sizeof(price_label), "%.4f", static_cast<double>(current_price));
+        else std::snprintf(price_label, sizeof(price_label), "%.2f", static_cast<double>(current_price));
+
+        // Draw arrow pointing to price line
+        if (price_in_range) {
+            ImVec2 arrow_pts[3] = {
+                ImVec2(scale_x, label_y),
+                ImVec2(scale_x + 5, label_y - 5),
+                ImVec2(scale_x + 5, label_y + 5)
+            };
+            draw_list->AddTriangleFilled(arrow_pts[0], arrow_pts[1], arrow_pts[2], price_color);
+        }
+
+        // Draw price label box
+        float label_width = ImGui::CalcTextSize(price_label).x + 10;
+        draw_list->AddRectFilled(
+            ImVec2(scale_x + 5, label_y - 9),
+            ImVec2(scale_x + 5 + label_width, label_y + 9),
+            price_color, 2.0f);
+        draw_list->AddText(ImVec2(scale_x + 10, label_y - 6), make_color(255, 255, 255), price_label);
     }
-
-    // Always draw the price label box
-    char price_label[32];
-    std::snprintf(price_label, sizeof(price_label), "%.2f", static_cast<double>(current_price));
-    draw_list->AddRectFilled(
-        ImVec2(chart_pos.x + canvas_size.x - padding_right + 2, label_y - 8),
-        ImVec2(chart_pos.x + canvas_size.x - 2, label_y + 8),
-        make_color(50, 150, 255));
-    draw_list->AddText(ImVec2(chart_pos.x + canvas_size.x - padding_right + 5, label_y - 6), make_color(255, 255, 255), price_label);
 
     // Draw horizontal lines
     if (m_hlines) {
@@ -773,7 +1101,7 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
-    // Draw automatic support/resistance levels (from daily candles)
+    // Draw automatic support/resistance levels (from daily candles, shown on all timeframes)
     if (!m_auto_sr_levels.empty()) {
         ImU32 resistance_color = make_color(180, 80, 80, 180);   // Red-ish
         ImU32 support_color = make_color(80, 180, 80, 180);      // Green-ish
@@ -1008,8 +1336,8 @@ bool ChartWidget::render(ImVec2 size) {
     // Draw OHLC info box for hovered candle
     if (m_hovered_candle >= 0 && m_hovered_candle < static_cast<int>(m_candles.size())) {
         const Candle& hc = m_candles[static_cast<size_t>(m_hovered_candle)];
-        bool bullish = hc.close >= hc.open;
-        ImU32 price_color = bullish ? make_color(38, 166, 91) : make_color(214, 69, 65);
+        bool hc_bullish = hc.close >= hc.open;
+        ImU32 ohlc_color = hc_bullish ? make_color(38, 166, 91) : make_color(214, 69, 65);
 
         char ohlc_text[128];
         std::snprintf(ohlc_text, sizeof(ohlc_text), "O: %.2f  H: %.2f  L: %.2f  C: %.2f  V: %.0f",
@@ -1025,13 +1353,13 @@ bool ChartWidget::render(ImVec2 size) {
             ImVec2(box_x - 3, box_y - 2),
             ImVec2(box_x + text_size.x + 3, box_y + text_size.y + 2),
             make_color(30, 30, 35, 220));
-        draw_list->AddText(ImVec2(box_x, box_y), price_color, ohlc_text);
+        draw_list->AddText(ImVec2(box_x, box_y), ohlc_color, ohlc_text);
     }
 
     // Draw volume panel
     if (show_volume) {
         float vol_top = chart_pos.y + main_chart_height;
-        float vol_bottom = vol_top + volume_height - 5.0f;
+        float vol_bottom = vol_top + volume_height - 2.0f;
 
         float max_vol = 0;
         for (int i = start_idx; i < end_idx; i++) {
@@ -1062,6 +1390,72 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
+    // Draw cumulative delta panel
+    if (show_delta) {
+        float delta_top = chart_pos.y + main_chart_height + volume_height;
+        float delta_mid = delta_top + delta_height / 2.0f;
+
+        // Find min/max delta in visible range
+        float min_delta = 0.0f;
+        float max_delta = 0.0f;
+        for (int i = start_idx; i < end_idx; i++) {
+            float d = m_cumulative_delta[static_cast<size_t>(i)];
+            if (d < min_delta) min_delta = d;
+            if (d > max_delta) max_delta = d;
+        }
+
+        // Ensure symmetric scale around zero
+        float abs_max = std::max(std::fabs(min_delta), std::fabs(max_delta));
+        if (abs_max < 1.0f) abs_max = 1.0f;
+
+        // Draw separator line
+        draw_list->AddLine(
+            ImVec2(chart_pos.x + padding_left, delta_top),
+            ImVec2(chart_pos.x + canvas_size.x - padding_right, delta_top),
+            make_color(60, 60, 60));
+
+        // Draw zero line
+        draw_list->AddLine(
+            ImVec2(chart_pos.x + padding_left, delta_mid),
+            ImVec2(chart_pos.x + canvas_size.x - padding_right, delta_mid),
+            make_color(80, 80, 80));
+
+        // Draw delta as filled area from zero line
+        float available_height = (delta_height - 4.0f) / 2.0f;
+
+        for (int i = start_idx; i < end_idx; i++) {
+            float delta = m_cumulative_delta[static_cast<size_t>(i)];
+            float x = candleToX(static_cast<float>(i));
+            if (x < chart_pos.x + padding_left || x > chart_pos.x + canvas_size.x - padding_right) continue;
+
+            // Normalize delta to -1..1 range
+            float norm_delta = delta / abs_max;
+            float bar_height = std::fabs(norm_delta) * available_height;
+
+            ImU32 color;
+            float bar_y;
+            if (delta >= 0) {
+                // Positive delta - draw above zero line (green)
+                color = make_color(38, 166, 91, 180);
+                bar_y = delta_mid - bar_height;
+                draw_list->AddRectFilled(
+                    ImVec2(x - body_width / 2, bar_y),
+                    ImVec2(x + body_width / 2, delta_mid), color);
+            } else {
+                // Negative delta - draw below zero line (red)
+                color = make_color(214, 69, 65, 180);
+                draw_list->AddRectFilled(
+                    ImVec2(x - body_width / 2, delta_mid),
+                    ImVec2(x + body_width / 2, delta_mid + bar_height), color);
+            }
+        }
+
+        // Draw "Delta" label
+        draw_list->AddText(
+            ImVec2(chart_pos.x + padding_left + 2, delta_top + 2),
+            make_color(120, 120, 120), "Delta");
+    }
+
     // Draw time axis
     float axis_y = chart_pos.y + canvas_size.y - time_axis_height + 5.0f - title_height;
     int label_interval = std::max(1, static_cast<int>(visible_candles / 6.0f));
@@ -1069,7 +1463,7 @@ bool ChartWidget::render(ImVec2 size) {
         float x = candleToX(static_cast<float>(i));
         if (x >= chart_pos.x + padding_left && x <= chart_pos.x + canvas_size.x - padding_right) {
             draw_list->AddLine(
-                ImVec2(x, chart_pos.y + main_chart_height + volume_height),
+                ImVec2(x, chart_pos.y + main_chart_height + volume_height + delta_height),
                 ImVec2(x, axis_y - 2), make_color(60, 60, 60));
 
             const char* ts = m_candles[static_cast<size_t>(i)].timestamp;

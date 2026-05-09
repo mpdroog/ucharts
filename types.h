@@ -210,6 +210,15 @@ struct AutoSRLevel {
     AutoSRLevel(float p, bool res, int idx) : price(p), is_resistance(res), candle_idx(idx) {}
 };
 
+// Auto-MA selection mode
+enum class AutoMAType {
+    NONE = 0,
+    EMA9 = 1,
+    SMA9 = 2,
+    EMA21 = 3,
+    SMA21 = 4
+};
+
 // Indicator settings
 struct IndicatorSettings {
     bool sma_enabled;
@@ -219,11 +228,19 @@ struct IndicatorSettings {
     bool boll_enabled;
     int boll_period;
     bool volume_enabled;
+    bool vwap_enabled;           // VWAP indicator
+    bool cumulative_delta_enabled; // Cumulative delta indicator
+    bool auto_ma_enabled;        // Auto-select best MA
+    AutoMAType auto_ma_type;     // Which MA was auto-selected
 
     IndicatorSettings() : sma_enabled(false), sma_period(20),
                           ema_enabled(false), ema_period(9),
                           boll_enabled(false), boll_period(20),
-                          volume_enabled(true) {}
+                          volume_enabled(true),
+                          vwap_enabled(true),
+                          cumulative_delta_enabled(true),
+                          auto_ma_enabled(true),
+                          auto_ma_type(AutoMAType::NONE) {}
 };
 
 // ============================================================================

@@ -440,6 +440,25 @@ int main(int argc, char** argv) {
                   static_cast<double>(fps), frame_count, static_cast<long long>(elapsed));
             frame_count = 0;
             last_profile_time = now;
+
+            // Retry missing timeframes every 5 seconds
+            for (int i = 0; i < NUM_TICKERS; ++i) {
+                const char* sym = g_symbol_states[i].symbol;
+                if (sym[0] != '\0') {
+                    // Check if any timeframe is missing and retry
+                    auto state = get_market_data().get_loading_state(sym);
+                    if (state == MarketData::LoadingState::COMPLETE) {
+                        bool has_daily = get_market_data().has_timeframe_data(sym, Timeframe::DAILY);
+                        bool has_1m = get_market_data().has_timeframe_data(sym, Timeframe::M1);
+                        bool has_5m = get_market_data().has_timeframe_data(sym, Timeframe::M5);
+                        if (!has_daily || !has_1m || !has_5m) {
+                            LOG_I("main", "Retrying missing data for %s (daily=%d, 1m=%d, 5m=%d)",
+                                  sym, has_daily ? 1 : 0, has_1m ? 1 : 0, has_5m ? 1 : 0);
+                            (void)get_market_data().load_symbol(sym);
+                        }
+                    }
+                }
+            }
         }
 
         glfwPollEvents();
