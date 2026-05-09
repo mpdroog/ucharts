@@ -141,8 +141,11 @@ bool MarketData::streams_connected() const {
 }
 
 bool MarketData::subscribe_quotes(const char* symbol) {
+    LOG_I("market", "Subscribing to L1/L2 quotes for %s", symbol);
+
     if (!m_streams_connected) {
         if (!connect_streams()) {
+            LOG_E("market", "Failed to connect streams: %s", m_error);
             return false;
         }
     }
@@ -150,14 +153,18 @@ bool MarketData::subscribe_quotes(const char* symbol) {
     // Subscribe to L1
     if (!get_iqfeed_level1().watch(symbol)) {
         std::snprintf(m_error, sizeof(m_error), "Failed to watch L1 for %s", symbol);
+        LOG_E("market", "%s", m_error);
         return false;
     }
+    LOG_I("market", "Watching L1 for %s", symbol);
 
     // Subscribe to L2
     if (!get_iqfeed_level2().watch(symbol, LEVEL2_DEPTH)) {
         std::snprintf(m_error, sizeof(m_error), "Failed to watch L2 for %s", symbol);
+        LOG_E("market", "%s", m_error);
         return false;
     }
+    LOG_I("market", "Watching L2 for %s", symbol);
 
     return true;
 }
@@ -180,14 +187,136 @@ void MarketData::update_from_streams() {
     }
 }
 
+// Parse time string "HH:MM:SS" to hour and minute
+static bool parse_time_hhmm(const char* time_str, int& hour, int& minute) {
+    if (time_str == nullptr || time_str[0] == '\0') return false;
+    int h = 0, m = 0, s = 0;
+    if (std::sscanf(time_str, "%d:%d:%d", &h, &m, &s) >= 2) {
+        hour = h;
+        minute = m;
+        return true;
+    }
+    return false;
+}
+
+// Check if timestamp matches the current candle period
+// For 1m: compare HH:MM
+// For 5m: compare HH:MM with minute floored to 5-min boundary
+static bool is_same_candle_period(const char* candle_ts, int tick_hour, int tick_minute, int interval_mins) {
+    if (candle_ts == nullptr || candle_ts[0] == '\0') return false;
+
+    // Candle timestamp might be "2024-05-10 09:30:00" or "09:30:00" or "09:30"
+    const char* time_part = candle_ts;
+    const char* space = std::strchr(candle_ts, ' ');
+    if (space != nullptr) {
+        time_part = space + 1;
+    }
+
+    int candle_hour = 0, candle_minute = 0;
+    if (!parse_time_hhmm(time_part, candle_hour, candle_minute)) {
+        return false;
+    }
+
+    // Floor both to interval boundary
+    int candle_period = candle_hour * 60 + (candle_minute / interval_mins) * interval_mins;
+    int tick_period = tick_hour * 60 + (tick_minute / interval_mins) * interval_mins;
+
+    return candle_period == tick_period;
+}
+
+// Create timestamp for a new candle based on tick time
+static void create_candle_timestamp(char* dest, size_t dest_size, int hour, int minute, int interval_mins) {
+    // Floor minute to interval boundary
+    int floored_minute = (minute / interval_mins) * interval_mins;
+    std::snprintf(dest, dest_size, "%02d:%02d:00", hour, floored_minute);
+}
+
 void MarketData::update_l1_quote(const char* symbol) {
     L1Quote quote;
-    if (get_iqfeed_level1().get_quote(symbol, quote)) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        auto it = m_symbols.find(symbol);
-        if (it != m_symbols.end()) {
-            it->second.current_price = quote.last;
+    if (!get_iqfeed_level1().get_quote(symbol, quote)) {
+        return;
+    }
+
+    // Parse tick time
+    int tick_hour = 0, tick_minute = 0;
+    bool has_time = parse_time_hhmm(quote.last_time, tick_hour, tick_minute);
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_symbols.find(symbol);
+    if (it == m_symbols.end()) {
+        return;
+    }
+
+    SymbolData& data = it->second;
+    data.current_price = quote.last;
+
+    // Skip candle updates if we don't have time info or no tick occurred
+    if (!has_time || quote.last <= 0) {
+        return;
+    }
+
+    // Update 1-minute candles
+    if (!data.candles_1m.empty()) {
+        Candle& last_1m = data.candles_1m.back();
+        if (is_same_candle_period(last_1m.timestamp, tick_hour, tick_minute, 1)) {
+            // Update existing candle
+            if (quote.last > last_1m.high) last_1m.high = quote.last;
+            if (quote.last < last_1m.low) last_1m.low = quote.last;
+            last_1m.close = quote.last;
+            // Volume is cumulative from L1, we can't easily get period volume
+        } else {
+            // New candle period - create new candle
+            Candle new_candle;
+            create_candle_timestamp(new_candle.timestamp, sizeof(new_candle.timestamp), tick_hour, tick_minute, 1);
+            new_candle.open = quote.last;
+            new_candle.high = quote.last;
+            new_candle.low = quote.last;
+            new_candle.close = quote.last;
+            new_candle.volume = 0;
+            data.candles_1m.push_back(new_candle);
+
+            // Keep candles limited to MAX_CANDLES
+            if (data.candles_1m.size() > MAX_CANDLES) {
+                data.candles_1m.erase(data.candles_1m.begin());
+            }
         }
+    }
+
+    // Update 5-minute candles
+    if (!data.candles_5m.empty()) {
+        Candle& last_5m = data.candles_5m.back();
+        if (is_same_candle_period(last_5m.timestamp, tick_hour, tick_minute, 5)) {
+            // Update existing candle
+            if (quote.last > last_5m.high) last_5m.high = quote.last;
+            if (quote.last < last_5m.low) last_5m.low = quote.last;
+            last_5m.close = quote.last;
+        } else {
+            // New candle period - create new candle
+            Candle new_candle;
+            create_candle_timestamp(new_candle.timestamp, sizeof(new_candle.timestamp), tick_hour, tick_minute, 5);
+            new_candle.open = quote.last;
+            new_candle.high = quote.last;
+            new_candle.low = quote.last;
+            new_candle.close = quote.last;
+            new_candle.volume = 0;
+            data.candles_5m.push_back(new_candle);
+
+            // Keep candles limited to MAX_CANDLES
+            if (data.candles_5m.size() > MAX_CANDLES) {
+                data.candles_5m.erase(data.candles_5m.begin());
+            }
+        }
+    }
+
+    // Update daily candle (use L1's OHLC which is for the day)
+    if (!data.candles_daily.empty()) {
+        Candle& last_daily = data.candles_daily.back();
+        // For daily, always update since L1 provides day's OHLC
+        if (quote.high > 0) last_daily.high = quote.high;
+        if (quote.low > 0) last_daily.low = quote.low;
+        if (quote.open > 0) last_daily.open = quote.open;
+        last_daily.close = quote.last;
+        if (quote.volume > 0) last_daily.volume = static_cast<float>(quote.volume);
     }
 }
 
@@ -757,86 +886,94 @@ void MarketData::on_lookup_result(const LookupResult& result) {
           result.symbol, result.success ? 1 : 0, result.candles.size(),
           static_cast<int>(result.type), result.interval_secs);
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(sym);
-    if (it == m_symbols.end()) {
-        LOG_E("market", "BUG: Symbol '%s' from IQFeed not found in map! Check case sensitivity.",
-              result.symbol);
-        return;  // Symbol no longer tracked
-    }
+    bool should_subscribe = false;
+    std::string sym_to_subscribe;
 
-    SymbolData& data = it->second;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_symbols.find(sym);
+        if (it == m_symbols.end()) {
+            LOG_E("market", "BUG: Symbol '%s' from IQFeed not found in map! Check case sensitivity.",
+                  result.symbol);
+            return;  // Symbol no longer tracked
+        }
 
-    if (result.success) {
-        // Copy candles to appropriate vector
-        if (result.type == LookupRequestType::DAILY) {
-            data.candles_daily = result.candles;
-            if (!data.candles_daily.empty() && data.current_price == 0) {
-                data.current_price = data.candles_daily.back().close;
+        SymbolData& data = it->second;
+
+        if (result.success) {
+            // Copy candles to appropriate vector
+            if (result.type == LookupRequestType::DAILY) {
+                data.candles_daily = result.candles;
+                if (!data.candles_daily.empty() && data.current_price == 0) {
+                    data.current_price = data.candles_daily.back().close;
+                }
+            } else if (result.interval_secs == 60) {
+                data.candles_1m = result.candles;
+                if (!data.candles_1m.empty()) {
+                    data.current_price = data.candles_1m.back().close;
+                }
+            } else if (result.interval_secs == 300) {
+                data.candles_5m = result.candles;
             }
-        } else if (result.interval_secs == 60) {
-            data.candles_1m = result.candles;
-            if (!data.candles_1m.empty()) {
-                data.current_price = data.candles_1m.back().close;
-            }
-        } else if (result.interval_secs == 300) {
-            data.candles_5m = result.candles;
-        }
-    } else {
-        // Log which timeframe failed
-        const char* tf_name = "unknown";
-        if (result.type == LookupRequestType::DAILY) {
-            tf_name = "daily";
-        } else if (result.interval_secs == 60) {
-            tf_name = "1-min";
-        } else if (result.interval_secs == 300) {
-            tf_name = "5-min";
-        }
-        LOG_W("market", "Failed to load %s %s: %s", sym.c_str(), tf_name, result.error);
-
-        // Store first error
-        if (data.load_error[0] == '\0') {
-            safe_strcpy(data.load_error, result.error, sizeof(data.load_error));
-        }
-    }
-
-    // Decrement pending count
-    data.pending_requests--;
-
-    // Check if all requests complete
-    if (data.pending_requests <= 0) {
-        data.pending_requests = 0;
-
-        // Did we get any data?
-        bool any_data = !data.candles_daily.empty() ||
-                        !data.candles_1m.empty() ||
-                        !data.candles_5m.empty();
-
-        LOG_I("market", "All requests complete for %s: daily=%zu 1m=%zu 5m=%zu any_data=%d",
-              sym.c_str(), data.candles_daily.size(), data.candles_1m.size(),
-              data.candles_5m.size(), any_data ? 1 : 0);
-
-        if (any_data) {
-            data.loaded = true;
-            data.loading_state = LoadingState::COMPLETE;
-            LOG_I("market", "Symbol %s marked as LOADED", sym.c_str());
         } else {
-            data.loading_state = LoadingState::ERROR;
-            if (data.load_error[0] == '\0') {
-                safe_strcpy(data.load_error, "No data received", sizeof(data.load_error));
+            // Log which timeframe failed
+            const char* tf_name = "unknown";
+            if (result.type == LookupRequestType::DAILY) {
+                tf_name = "daily";
+            } else if (result.interval_secs == 60) {
+                tf_name = "1-min";
+            } else if (result.interval_secs == 300) {
+                tf_name = "5-min";
             }
-            LOG_E("market", "Symbol %s load failed: %s", sym.c_str(), data.load_error);
+            LOG_W("market", "Failed to load %s %s: %s", sym.c_str(), tf_name, result.error);
+
+            // Store first error
+            if (data.load_error[0] == '\0') {
+                safe_strcpy(data.load_error, result.error, sizeof(data.load_error));
+            }
         }
 
-        // Clean up user_data (symbol string we allocated)
-        // Note: user_data is same for all 3 requests, only delete once
-        if (result.user_data != nullptr) {
-            delete[] static_cast<char*>(result.user_data);
-        }
+        // Decrement pending count
+        data.pending_requests--;
 
-        // TODO: Subscribe to L1/L2 for real-time updates
-        // This should be done on a background thread to avoid blocking
-        // For now, L1/L2 streaming is disabled until async connection is implemented
+        // Check if all requests complete
+        if (data.pending_requests <= 0) {
+            data.pending_requests = 0;
+
+            // Did we get any data?
+            bool any_data = !data.candles_daily.empty() ||
+                            !data.candles_1m.empty() ||
+                            !data.candles_5m.empty();
+
+            LOG_I("market", "All requests complete for %s: daily=%zu 1m=%zu 5m=%zu any_data=%d",
+                  sym.c_str(), data.candles_daily.size(), data.candles_1m.size(),
+                  data.candles_5m.size(), any_data ? 1 : 0);
+
+            if (any_data) {
+                data.loaded = true;
+                data.loading_state = LoadingState::COMPLETE;
+                LOG_I("market", "Symbol %s marked as LOADED", sym.c_str());
+                should_subscribe = true;
+                sym_to_subscribe = sym;
+            } else {
+                data.loading_state = LoadingState::ERROR;
+                if (data.load_error[0] == '\0') {
+                    safe_strcpy(data.load_error, "No data received", sizeof(data.load_error));
+                }
+                LOG_E("market", "Symbol %s load failed: %s", sym.c_str(), data.load_error);
+            }
+
+            // Clean up user_data (symbol string we allocated)
+            // Note: user_data is same for all 3 requests, only delete once
+            if (result.user_data != nullptr) {
+                delete[] static_cast<char*>(result.user_data);
+            }
+        }
+    }  // lock released here
+
+    // Subscribe to L1/L2 for real-time updates (outside lock to avoid deadlock)
+    if (should_subscribe) {
+        (void)subscribe_quotes(sym_to_subscribe.c_str());
     }
 }
 

@@ -14,6 +14,13 @@ enum class ChartDrawMode {
     TRENDLINE = 2
 };
 
+// Market session type (US Eastern Time)
+enum class MarketSession {
+    PRE_MARKET,     // 04:00 - 09:30 ET
+    REGULAR,        // 09:30 - 16:00 ET
+    AFTER_HOURS     // 16:00 - 20:00 ET
+};
+
 // Chart widget for rendering candlestick charts with indicators
 class ChartWidget {
 public:
@@ -22,6 +29,7 @@ public:
     // Set chart data
     void set_symbol(const char* symbol);
     void set_candles(const std::vector<Candle>& candles);
+    void set_daily_candles(const std::vector<Candle>* daily_candles);  // For S/R calculation
     void set_title(const char* title);
     void set_current_price(float price);
 
@@ -88,7 +96,14 @@ private:
     bool m_indicators_dirty;  // Set when candles/settings change
     std::string m_symbol;     // Current symbol being displayed
 
+    // Auto support/resistance levels (calculated from daily candles)
+    const std::vector<Candle>* m_daily_candles;  // Pointer to daily candles for S/R calc
+    std::vector<AutoSRLevel> m_auto_sr_levels;
+    bool m_sr_dirty;
+
     // Helper functions
+    void calculate_auto_sr();
+    static MarketSession get_session_from_timestamp(const char* timestamp);
     void calculate_sma(int period);
     void calculate_ema(int period);
     void calculate_bollinger(int period, float mult);

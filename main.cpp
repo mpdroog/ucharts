@@ -194,10 +194,13 @@ static void update_charts_for_selected_ticker() {
     SymbolState& state = g_symbol_states[g_selected_ticker];
 
     // Get candle data from market data (empty is OK if data not yet loaded)
-    std::vector<Candle> candles_1m, candles_5m, candles_daily;
+    // Use static for daily candles so chart widgets can maintain a stable pointer for S/R calculation
+    std::vector<Candle> candles_1m, candles_5m;
+    static std::vector<Candle> s_candles_daily;
     (void)get_market_data().get_candles(symbol, Timeframe::M1, candles_1m, MAX_CANDLES);
     (void)get_market_data().get_candles(symbol, Timeframe::M5, candles_5m, MAX_CANDLES);
-    (void)get_market_data().get_candles(symbol, Timeframe::DAILY, candles_daily, MAX_CANDLES);
+    (void)get_market_data().get_candles(symbol, Timeframe::DAILY, s_candles_daily, MAX_CANDLES);
+    const std::vector<Candle>& candles_daily = s_candles_daily;
 
     // Log data availability issues (helps catch bugs early)
     // Use static to only log once per symbol to avoid spam
@@ -233,6 +236,7 @@ static void update_charts_for_selected_ticker() {
     // Update charts (set_symbol first to track ticker changes for dirty flag)
     g_chart_1m.set_symbol(symbol);
     g_chart_1m.set_candles(candles_1m);
+    g_chart_1m.set_daily_candles(&s_candles_daily);  // For S/R calculation
     g_chart_1m.set_title("1-Min");
     g_chart_1m.set_drawings(&state.hlines, &state.trendlines);
     g_chart_1m.set_indicator_settings(&state.indicators);
@@ -240,6 +244,7 @@ static void update_charts_for_selected_ticker() {
 
     g_chart_5m.set_symbol(symbol);
     g_chart_5m.set_candles(candles_5m);
+    g_chart_5m.set_daily_candles(&s_candles_daily);  // For S/R calculation
     g_chart_5m.set_title("5-Min");
     g_chart_5m.set_drawings(&state.hlines, &state.trendlines);
     g_chart_5m.set_indicator_settings(&state.indicators);
@@ -247,6 +252,7 @@ static void update_charts_for_selected_ticker() {
 
     g_chart_daily.set_symbol(symbol);
     g_chart_daily.set_candles(candles_daily);
+    g_chart_daily.set_daily_candles(&s_candles_daily);  // For S/R calculation
     g_chart_daily.set_title("Daily");
     g_chart_daily.set_drawings(&state.hlines, &state.trendlines);
     g_chart_daily.set_indicator_settings(&state.indicators);

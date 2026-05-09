@@ -200,6 +200,16 @@ struct TrendLine {
                   color(0), style(LineStyle::SOLID), source_tf(Timeframe::DAILY), selected(false) {}
 };
 
+// Automatic support/resistance level (calculated from daily highs/lows)
+struct AutoSRLevel {
+    float price;
+    bool is_resistance;  // true = resistance (swing high), false = support (swing low)
+    int candle_idx;      // Index in daily candles where this level was identified
+
+    AutoSRLevel() : price(0), is_resistance(true), candle_idx(0) {}
+    AutoSRLevel(float p, bool res, int idx) : price(p), is_resistance(res), candle_idx(idx) {}
+};
+
 // Indicator settings
 struct IndicatorSettings {
     bool sma_enabled;

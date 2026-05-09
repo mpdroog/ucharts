@@ -4,6 +4,7 @@
 #include "logger.h"
 #include <cstring>
 #include <cstdio>
+#include <cmath>
 
 TickerWidget::TickerWidget()
     : m_selected(false)
@@ -13,14 +14,23 @@ TickerWidget::TickerWidget()
     , m_order_price(0.0f)
     , m_editing_symbol(false)
     , m_edit_frames(0)
+    , m_last(0.0f)
+    , m_last_size(0)
+    , m_high(0.0f)
+    , m_low(0.0f)
+    , m_open(0.0f)
+    , m_close(0.0f)
+    , m_volume(0)
     , m_best_bid(0.0f)
     , m_best_ask(0.0f)
+    , m_prev_last(0.0f)
 {
     m_symbol[0] = '\0';
     m_qty_input[0] = '\0';
     m_price_input[0] = '\0';
     m_symbol_input[0] = '\0';
     m_error_msg[0] = '\0';
+    m_last_time[0] = '\0';
 }
 
 void TickerWidget::set_market_data(MarketData* market) {
@@ -97,16 +107,152 @@ void TickerWidget::update_market_data() {
         m_time_sales.clear();
         m_best_bid = 0.0f;
         m_best_ask = 0.0f;
+        m_last = 0.0f;
+        m_high = 0.0f;
+        m_low = 0.0f;
+        m_volume = 0;
         return;
     }
 
-    (void)m_market->get_level2(m_symbol, m_bids, m_asks, m_best_bid, m_best_ask);
-    (void)m_market->get_time_sales(m_symbol, m_time_sales, MAX_TIME_SALES_ROWS);
+    // Get Level 1 quote data (only if L1 is connected)
+    if (get_iqfeed_level1().is_connected()) {
+        L1Quote quote;
+        if (get_iqfeed_level1().get_quote(m_symbol, quote)) {
+            m_best_bid = quote.bid;
+            m_best_ask = quote.ask;
+            m_last = quote.last;
+            m_last_size = quote.last_size;
+            m_high = quote.high;
+            m_low = quote.low;
+            m_open = quote.open;
+            m_close = quote.close;
+            m_volume = quote.volume;
+            safe_strcpy(m_last_time, quote.last_time, sizeof(m_last_time));
+
+            // Update Time & Sales from L1 trade updates
+            update_time_sales_from_l1();
+        }
+    }
+
+    // Get Level 2 data
+    float bid_tmp = 0.0f, ask_tmp = 0.0f;
+    (void)m_market->get_level2(m_symbol, m_bids, m_asks, bid_tmp, ask_tmp);
+
+    // Use L2 bid/ask if L1 not available
+    if (m_best_bid <= 0.0f) m_best_bid = bid_tmp;
+    if (m_best_ask <= 0.0f) m_best_ask = ask_tmp;
+
+    // Fall back to stored T&S if streaming is empty
+    if (m_time_sales.empty()) {
+        (void)m_market->get_time_sales(m_symbol, m_time_sales, MAX_TIME_SALES_ROWS);
+    }
 
     // Update default order price to best ask if not set
     if (m_order_price <= 0.0f && m_best_ask > 0.0f) {
         set_order_price(m_best_ask);
     }
+}
+
+void TickerWidget::update_time_sales_from_l1() {
+    // Only add entry if we have a trade (last price > 0) and it changed
+    if (m_last <= 0.0f) return;
+
+    // Check if this is a new trade (price changed)
+    bool is_new_trade = false;
+    if (m_time_sales.empty()) {
+        is_new_trade = true;
+    } else {
+        const TimeSalesEntry& latest = m_time_sales.front();
+        // New trade if price changed significantly
+        if (std::abs(latest.price - m_last) > 0.001f) {
+            is_new_trade = true;
+        }
+    }
+
+    if (is_new_trade && m_last_size > 0) {
+        TimeSalesEntry entry;
+        // Use last_time if available, otherwise leave empty
+        if (m_last_time[0] != '\0') {
+            safe_strcpy(entry.timestamp, m_last_time, sizeof(entry.timestamp));
+        } else {
+            entry.timestamp[0] = '\0';
+        }
+        entry.price = m_last;
+        entry.size = m_last_size;
+
+        // Determine direction based on previous last price
+        if (m_prev_last > 0.0f) {
+            if (m_last > m_prev_last) {
+                entry.direction = TradeDirection::UP;
+            } else if (m_last < m_prev_last) {
+                entry.direction = TradeDirection::DOWN;
+            } else {
+                entry.direction = TradeDirection::SAME;
+            }
+        } else {
+            entry.direction = TradeDirection::SAME;
+        }
+
+        // Insert at front (newest first)
+        m_time_sales.insert(m_time_sales.begin(), entry);
+
+        // Limit size
+        while (m_time_sales.size() > MAX_TIME_SALES_ROWS) {
+            m_time_sales.pop_back();
+        }
+
+        m_prev_last = m_last;
+    }
+}
+
+void TickerWidget::render_level1(float width) {
+    // Compact Level 1 display: Bid | Last | Ask on first row, H/L/Vol on second
+    float col_width = width / 3.0f;
+
+    // Row 1: Bid | Last (with change indicator) | Ask
+    ImGui::PushStyleColor(ImGuiCol_Text, make_color(0, 200, 0, 255));  // Green for bid
+    ImGui::Text("B: %.2f", static_cast<double>(m_best_bid));
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine(col_width);
+
+    // Last price - color based on direction from close
+    ImU32 last_color = make_color(255, 255, 255, 255);  // White default
+    if (m_close > 0.0f) {
+        if (m_last > m_close) {
+            last_color = make_color(0, 255, 0, 255);  // Green if up
+        } else if (m_last < m_close) {
+            last_color = make_color(255, 0, 0, 255);  // Red if down
+        }
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, last_color);
+    ImGui::Text("%.2f", static_cast<double>(m_last));
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine(col_width * 2.0f);
+
+    ImGui::PushStyleColor(ImGuiCol_Text, make_color(255, 80, 80, 255));  // Red for ask
+    ImGui::Text("A: %.2f", static_cast<double>(m_best_ask));
+    ImGui::PopStyleColor();
+
+    // Row 2: High | Low | Volume (in K or M)
+    ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));  // Gray for secondary info
+
+    ImGui::Text("H: %.2f", static_cast<double>(m_high));
+    ImGui::SameLine(col_width);
+    ImGui::Text("L: %.2f", static_cast<double>(m_low));
+    ImGui::SameLine(col_width * 2.0f);
+
+    // Format volume (K for thousands, M for millions)
+    if (m_volume >= 1000000) {
+        ImGui::Text("V: %.1fM", static_cast<double>(m_volume) / 1000000.0);
+    } else if (m_volume >= 1000) {
+        ImGui::Text("V: %.1fK", static_cast<double>(m_volume) / 1000.0);
+    } else {
+        ImGui::Text("V: %lld", static_cast<long long>(m_volume));
+    }
+
+    ImGui::PopStyleColor();
 }
 
 bool TickerWidget::validate_symbol(const char* symbol) {
@@ -233,29 +379,38 @@ bool TickerWidget::render(ImVec2 size) {
         }
 
         ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
 
-        // Calculate remaining height for Level 2 and T&S
-        float remaining_height = content_size.y - ImGui::GetCursorPosY() - 80.0f; // Reserve 80 for order entry
-        float level2_height = remaining_height * 0.6f;
-        float ts_height = remaining_height * 0.4f;
-
-        // Level 2 display
-        render_level2(ImVec2(content_size.x, level2_height));
+        // Level 1 display (compact quote data)
+        render_level1(content_size.x);
 
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Time & Sales display
-        render_time_sales(ImVec2(content_size.x, ts_height));
+        // Calculate remaining height for Level 2 and T&S (side by side)
+        float remaining_height = content_size.y - ImGui::GetCursorPosY() - 60.0f; // Reserve 60 for order entry
+        float panel_width = (content_size.x - 10.0f) / 2.0f;  // Split horizontally
 
-        ImGui::Spacing();
+        // Level 2 and Time & Sales side by side
+        ImGui::BeginChild("L2TSPanel", ImVec2(content_size.x, remaining_height), false);
+        {
+            // Level 2 on left
+            ImGui::BeginChild("L2Panel", ImVec2(panel_width, remaining_height - 5.0f), false);
+            render_level2(ImVec2(panel_width - 5.0f, remaining_height - 20.0f));
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+
+            // Time & Sales on right
+            ImGui::BeginChild("TSPanel", ImVec2(panel_width, remaining_height - 5.0f), false);
+            render_time_sales(ImVec2(panel_width - 5.0f, remaining_height - 20.0f));
+            ImGui::EndChild();
+        }
+        ImGui::EndChild();
+
         ImGui::Separator();
-        ImGui::Spacing();
 
-        // Order entry
+        // Order entry (compact)
         render_order_entry(content_size.x);
     }
     ImGui::EndChild();
@@ -268,23 +423,20 @@ bool TickerWidget::render(ImVec2 size) {
 }
 
 void TickerWidget::render_level2(ImVec2 size) {
-    ImGui::TextUnformatted("Level 2");
+    ImGui::TextUnformatted("L2");
 
     if (ImGui::BeginChild("Level2", size, false)) {
-        float col_width = size.x / 6.0f;
+        // Compact 4-column layout: Price | Size | Price | Size
+        float col_width = size.x / 4.0f;
 
         // Headers
         ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
-        ImGui::Columns(6, "L2Header", false);
+        ImGui::Columns(4, "L2Header", false);
         ImGui::SetColumnWidth(0, col_width);
         ImGui::SetColumnWidth(1, col_width);
         ImGui::SetColumnWidth(2, col_width);
         ImGui::SetColumnWidth(3, col_width);
-        ImGui::SetColumnWidth(4, col_width);
-        ImGui::SetColumnWidth(5, col_width);
 
-        ImGui::Text("Exch");
-        ImGui::NextColumn();
         ImGui::Text("Bid");
         ImGui::NextColumn();
         ImGui::Text("Size");
@@ -293,29 +445,21 @@ void TickerWidget::render_level2(ImVec2 size) {
         ImGui::NextColumn();
         ImGui::Text("Size");
         ImGui::NextColumn();
-        ImGui::Text("Exch");
-        ImGui::NextColumn();
         ImGui::PopStyleColor();
 
-        ImGui::Separator();
-
-        // Data rows
-        size_t max_rows = MAX_LEVEL2_ROWS;
+        // Compact: show 6 rows max for side-by-side layout
+        size_t max_rows = 6;
         for (size_t i = 0; i < max_rows; ++i) {
             // Bid side
             if (i < m_bids.size()) {
                 const Level2Entry& bid = m_bids[i];
                 ImGui::PushStyleColor(ImGuiCol_Text, bid.color);
-                ImGui::Text("%s", bid.exchange);
-                ImGui::NextColumn();
                 ImGui::Text("%.2f", static_cast<double>(bid.price));
                 ImGui::NextColumn();
-                ImGui::Text("%.1f", static_cast<double>(bid.size) / 1000.0);
+                ImGui::Text("%.0f", static_cast<double>(bid.size) / 100.0);  // In lots
                 ImGui::NextColumn();
                 ImGui::PopStyleColor();
             } else {
-                ImGui::Text("-");
-                ImGui::NextColumn();
                 ImGui::Text("-");
                 ImGui::NextColumn();
                 ImGui::Text("-");
@@ -328,14 +472,10 @@ void TickerWidget::render_level2(ImVec2 size) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ask.color);
                 ImGui::Text("%.2f", static_cast<double>(ask.price));
                 ImGui::NextColumn();
-                ImGui::Text("%.1f", static_cast<double>(ask.size) / 1000.0);
-                ImGui::NextColumn();
-                ImGui::Text("%s", ask.exchange);
+                ImGui::Text("%.0f", static_cast<double>(ask.size) / 100.0);  // In lots
                 ImGui::NextColumn();
                 ImGui::PopStyleColor();
             } else {
-                ImGui::Text("-");
-                ImGui::NextColumn();
                 ImGui::Text("-");
                 ImGui::NextColumn();
                 ImGui::Text("-");
@@ -349,30 +489,27 @@ void TickerWidget::render_level2(ImVec2 size) {
 }
 
 void TickerWidget::render_time_sales(ImVec2 size) {
-    ImGui::TextUnformatted("Time & Sales");
+    ImGui::TextUnformatted("T&S");
 
     if (ImGui::BeginChild("TimeSales", size, false)) {
-        float col_width = size.x / 3.0f;
+        // Compact 2-column layout: Price | Size (time is less important in compact view)
+        float col_width = size.x / 2.0f;
 
         // Headers
         ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
-        ImGui::Columns(3, "TSHeader", false);
+        ImGui::Columns(2, "TSHeader", false);
         ImGui::SetColumnWidth(0, col_width);
         ImGui::SetColumnWidth(1, col_width);
-        ImGui::SetColumnWidth(2, col_width);
 
-        ImGui::Text("Time");
-        ImGui::NextColumn();
         ImGui::Text("Price");
         ImGui::NextColumn();
         ImGui::Text("Size");
         ImGui::NextColumn();
         ImGui::PopStyleColor();
 
-        ImGui::Separator();
-
-        // Data rows (newest first)
-        for (size_t i = 0; i < m_time_sales.size() && i < MAX_TIME_SALES_ROWS; ++i) {
+        // Compact: show 8 rows max
+        size_t max_rows = 8;
+        for (size_t i = 0; i < m_time_sales.size() && i < max_rows; ++i) {
             const TimeSalesEntry& entry = m_time_sales[i];
 
             // Color based on direction
@@ -390,60 +527,46 @@ void TickerWidget::render_time_sales(ImVec2 size) {
             }
 
             ImGui::PushStyleColor(ImGuiCol_Text, color);
-            ImGui::Text("%s", entry.timestamp);
-            ImGui::NextColumn();
             ImGui::Text("%.2f", static_cast<double>(entry.price));
             ImGui::NextColumn();
-            ImGui::Text("%d", entry.size);
+            // Show size in lots (100 shares = 1 lot)
+            if (entry.size >= 1000) {
+                ImGui::Text("%.1fK", static_cast<double>(entry.size) / 1000.0);
+            } else {
+                ImGui::Text("%d", entry.size);
+            }
             ImGui::NextColumn();
             ImGui::PopStyleColor();
         }
 
         ImGui::Columns(1);
-
-        // Auto-scroll to show newest entries
-        if (ImGui::GetScrollY() < ImGui::GetScrollMaxY()) {
-            ImGui::SetScrollHereY(0.0f);
-        }
     }
     ImGui::EndChild();
 }
 
 void TickerWidget::render_order_entry(float width) {
-    float field_width = (width - 20) / 2.0f;
+    // Compact order entry: Qty input + BUY/SELL buttons on one line
+    float input_width = width * 0.25f;
+    float button_width = (width - input_width - 15.0f) / 2.0f;
+    float button_height = 20.0f;
 
-    // Quantity and Price inputs
-    ImGui::PushItemWidth(field_width);
-
-    ImGui::Text("Qty:");
-    ImGui::SameLine();
+    ImGui::PushItemWidth(input_width);
     if (ImGui::InputText("##Qty", m_qty_input, sizeof(m_qty_input), ImGuiInputTextFlags_CharsDecimal)) {
         m_order_qty = atoi(m_qty_input);
         if (m_order_qty < 0) m_order_qty = 0;
     }
-
-    ImGui::SameLine();
-    ImGui::Text("Price:");
-    ImGui::SameLine();
-    if (ImGui::InputText("##Price", m_price_input, sizeof(m_price_input), ImGuiInputTextFlags_CharsDecimal)) {
-        m_order_price = static_cast<float>(atof(m_price_input));
-        if (m_order_price < 0.0f) m_order_price = 0.0f;
-    }
-
     ImGui::PopItemWidth();
 
-    // Buy and Sell buttons
-    float button_width = (width - 15) / 2.0f;
-    float button_height = 25.0f;
+    ImGui::SameLine();
 
     ImGui::PushStyleColor(ImGuiCol_Button, make_color(0, 100, 0, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, make_color(0, 150, 0, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, make_color(0, 200, 0, 255));
 
     if (ImGui::Button("BUY", ImVec2(button_width, button_height))) {
-        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && m_order_price > 0.0f) {
-            LOG_I("ticker", "BUY order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(m_order_price));
-            m_order_mgr->buy(m_symbol, m_order_qty, m_order_price);
+        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && m_best_ask > 0.0f) {
+            LOG_I("ticker", "BUY order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(m_best_ask + 0.05f));
+            m_order_mgr->buy(m_symbol, m_order_qty, m_best_ask + 0.05f);
         }
     }
 
@@ -456,9 +579,9 @@ void TickerWidget::render_order_entry(float width) {
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, make_color(255, 0, 0, 255));
 
     if (ImGui::Button("SELL", ImVec2(button_width, button_height))) {
-        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && m_order_price > 0.0f) {
-            LOG_I("ticker", "SELL order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(m_order_price));
-            m_order_mgr->sell(m_symbol, m_order_qty, m_order_price);
+        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && m_best_bid > 0.0f) {
+            LOG_I("ticker", "SELL order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(m_best_bid - 0.05f));
+            m_order_mgr->sell(m_symbol, m_order_qty, m_best_bid - 0.05f);
         }
     }
 

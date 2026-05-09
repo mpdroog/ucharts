@@ -12,7 +12,7 @@ ChartWidget::ChartWidget()
       m_hovered_candle(-1), m_is_panning(false), m_pan_start_x(0), m_pan_start_pan(0),
       m_dragging_hline(-1), m_dragging_trendline(-1), m_dragging_trendline_point(-1),
       m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0),
-      m_indicators_dirty(true) {
+      m_indicators_dirty(true), m_daily_candles(nullptr), m_sr_dirty(true) {
 }
 
 void ChartWidget::set_symbol(const char* symbol) {
@@ -20,6 +20,7 @@ void ChartWidget::set_symbol(const char* symbol) {
     if (m_symbol != symbol) {
         m_symbol = symbol;
         m_indicators_dirty = true;
+        m_sr_dirty = true;  // Recalculate S/R for new symbol
     }
 }
 
@@ -27,6 +28,18 @@ void ChartWidget::set_candles(const std::vector<Candle>& candles) {
     // Only update if dirty (symbol changed) or data actually different
     if (m_indicators_dirty || candles.size() != m_candles.size()) {
         m_candles = candles;
+    }
+}
+
+void ChartWidget::set_daily_candles(const std::vector<Candle>* daily_candles) {
+    size_t new_size = daily_candles ? daily_candles->size() : 0;
+
+    // Always update the pointer
+    m_daily_candles = daily_candles;
+
+    // Recalculate if we have data but no levels yet, or if size changed
+    if (new_size >= 3 && m_auto_sr_levels.empty()) {
+        m_sr_dirty = true;
     }
 }
 
@@ -186,6 +199,110 @@ void ChartWidget::calculate_bollinger(int period, float mult) {
     }
 }
 
+MarketSession ChartWidget::get_session_from_timestamp(const char* timestamp) {
+    if (timestamp == nullptr || timestamp[0] == '\0') {
+        return MarketSession::REGULAR;
+    }
+
+    // Find time part (after space if present)
+    const char* time_part = timestamp;
+    const char* space = std::strchr(timestamp, ' ');
+    if (space != nullptr) {
+        time_part = space + 1;
+    }
+
+    int hour = 0, minute = 0;
+    if (std::sscanf(time_part, "%d:%d", &hour, &minute) < 2) {
+        return MarketSession::REGULAR;
+    }
+
+    int time_mins = hour * 60 + minute;
+
+    // Pre-market: 04:00 - 09:30 (240 - 570)
+    if (time_mins >= 240 && time_mins < 570) {
+        return MarketSession::PRE_MARKET;
+    }
+    // Regular hours: 09:30 - 16:00 (570 - 960)
+    if (time_mins >= 570 && time_mins < 960) {
+        return MarketSession::REGULAR;
+    }
+    // After-hours: 16:00 - 20:00 (960 - 1200)
+    if (time_mins >= 960 && time_mins < 1200) {
+        return MarketSession::AFTER_HOURS;
+    }
+
+    return MarketSession::REGULAR;
+}
+
+void ChartWidget::calculate_auto_sr() {
+    m_auto_sr_levels.clear();
+
+    if (m_daily_candles == nullptr || m_daily_candles->size() < 3) {
+        return;
+    }
+
+    const std::vector<Candle>& candles = *m_daily_candles;
+    float current_price = candles.back().close;
+
+    // Calculate average volume for filtering
+    float total_volume = 0.0f;
+    int volume_count = 0;
+    for (const auto& c : candles) {
+        if (c.volume > 0) {
+            total_volume += c.volume;
+            volume_count++;
+        }
+    }
+    float avg_volume = (volume_count > 0) ? (total_volume / static_cast<float>(volume_count)) : 0.0f;
+    float min_volume = avg_volume * 0.5f;
+
+    // Collect all swing highs (potential resistance) and swing lows (potential support)
+    std::vector<AutoSRLevel> all_resistance;
+    std::vector<AutoSRLevel> all_support;
+
+    for (size_t i = 1; i < candles.size() - 1; i++) {
+        const Candle& prev = candles[i - 1];
+        const Candle& curr = candles[i];
+        const Candle& next = candles[i + 1];
+
+        bool has_significant_volume = (avg_volume <= 0) || (curr.volume >= min_volume);
+        if (!has_significant_volume) continue;
+
+        // Swing high -> potential resistance (only if ABOVE current price)
+        if (curr.high > prev.high && curr.high > next.high) {
+            if (curr.high > current_price) {
+                all_resistance.emplace_back(curr.high, true, static_cast<int>(i));
+            }
+        }
+
+        // Swing low -> potential support (only if BELOW current price)
+        if (curr.low < prev.low && curr.low < next.low) {
+            if (curr.low < current_price) {
+                all_support.emplace_back(curr.low, false, static_cast<int>(i));
+            }
+        }
+    }
+
+    // Sort resistance by price (ascending - closest to current price first)
+    std::sort(all_resistance.begin(), all_resistance.end(),
+              [](const AutoSRLevel& a, const AutoSRLevel& b) { return a.price < b.price; });
+
+    // Sort support by price (descending - closest to current price first)
+    std::sort(all_support.begin(), all_support.end(),
+              [](const AutoSRLevel& a, const AutoSRLevel& b) { return a.price > b.price; });
+
+    // Take up to 3 closest resistance levels
+    const size_t MAX_LEVELS = 3;
+    for (size_t i = 0; i < std::min(all_resistance.size(), MAX_LEVELS); i++) {
+        m_auto_sr_levels.push_back(all_resistance[i]);
+    }
+
+    // Take up to 3 closest support levels
+    for (size_t i = 0; i < std::min(all_support.size(), MAX_LEVELS); i++) {
+        m_auto_sr_levels.push_back(all_support[i]);
+    }
+}
+
 void ChartWidget::draw_dashed_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 color, float thickness, float dash_size) {
     float dx = p2.x - p1.x;
     float dy = p2.y - p1.y;
@@ -229,6 +346,13 @@ bool ChartWidget::render(ImVec2 size) {
     if (m_indicators_dirty) {
         recalculate_indicators();
         m_indicators_dirty = false;
+    }
+
+    // Recalculate auto S/R from daily candles
+    // Also recalculate if we have data but no levels (handles initial load timing)
+    if (m_sr_dirty || (m_daily_candles && m_daily_candles->size() >= 3 && m_auto_sr_levels.empty())) {
+        calculate_auto_sr();
+        m_sr_dirty = false;
     }
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -340,6 +464,12 @@ bool ChartWidget::render(ImVec2 size) {
         if (m_current_price > max_price) max_price = m_current_price;
     }
 
+    // Include auto S/R levels in price range so they're always visible
+    for (const auto& sr : m_auto_sr_levels) {
+        if (sr.price < min_price) min_price = sr.price;
+        if (sr.price > max_price) max_price = sr.price;
+    }
+
     // Add padding to price range
     float price_range = max_price - min_price;
     if (price_range < 0.01f) price_range = 0.01f;
@@ -443,6 +573,48 @@ bool ChartWidget::render(ImVec2 size) {
         char label[32];
         std::snprintf(label, sizeof(label), "%.2f", static_cast<double>(price));
         draw_list->AddText(ImVec2(chart_pos.x + canvas_size.x - padding_right + 5, y - 6), make_color(120, 120, 120), label);
+    }
+
+    // Draw extended hours background shading (pre-market and after-hours)
+    // Only for intraday timeframes (1m, 5m)
+    if (m_timeframe == Timeframe::M1 || m_timeframe == Timeframe::M5) {
+        ImU32 extended_hours_color = make_color(35, 35, 42);  // Slightly lighter than background
+        MarketSession prev_session = MarketSession::REGULAR;
+        float region_start_x = -1.0f;
+
+        for (int i = start_idx; i <= end_idx; i++) {
+            MarketSession session = MarketSession::REGULAR;
+            float x = 0.0f;
+
+            if (i < end_idx) {
+                const Candle& c = m_candles[static_cast<size_t>(i)];
+                session = get_session_from_timestamp(c.timestamp);
+                x = candleToX(static_cast<float>(i));
+            }
+
+            // Check for session transition or end of range
+            bool is_extended = (session == MarketSession::PRE_MARKET || session == MarketSession::AFTER_HOURS);
+            bool was_extended = (prev_session == MarketSession::PRE_MARKET || prev_session == MarketSession::AFTER_HOURS);
+
+            if (was_extended && (!is_extended || i == end_idx)) {
+                // End of extended hours region - draw it
+                if (region_start_x >= 0.0f) {
+                    float region_end_x = (i < end_idx) ? x - candle_width / 2.0f : candleToX(static_cast<float>(i - 1)) + candle_width / 2.0f;
+                    draw_list->AddRectFilled(
+                        ImVec2(std::max(region_start_x, chart_pos.x + padding_left), chart_pos.y + padding_top),
+                        ImVec2(std::min(region_end_x, chart_pos.x + canvas_size.x - padding_right), chart_pos.y + main_chart_height),
+                        extended_hours_color);
+                }
+                region_start_x = -1.0f;
+            }
+
+            if (is_extended && !was_extended) {
+                // Start of extended hours region
+                region_start_x = x - candle_width / 2.0f;
+            }
+
+            prev_session = session;
+        }
     }
 
     // Draw Bollinger bands
@@ -589,6 +761,28 @@ bool ChartWidget::render(ImVec2 size) {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
             } else {
                 m_dragging_hline = -1;
+            }
+        }
+    }
+
+    // Draw automatic support/resistance levels (from daily candles)
+    if (!m_auto_sr_levels.empty()) {
+        ImU32 resistance_color = make_color(180, 80, 80, 180);   // Red-ish
+        ImU32 support_color = make_color(80, 180, 80, 180);      // Green-ish
+
+        for (const AutoSRLevel& level : m_auto_sr_levels) {
+            float y = priceToY(level.price);
+            if (y >= chart_pos.y + padding_top && y <= chart_pos.y + main_chart_height - padding_top) {
+                ImU32 color = level.is_resistance ? resistance_color : support_color;
+                draw_dashed_line(draw_list,
+                    ImVec2(chart_pos.x + padding_left, y),
+                    ImVec2(chart_pos.x + canvas_size.x - padding_right, y),
+                    color, 1.0f, 6.0f);
+
+                // Draw price label
+                char label[32];
+                std::snprintf(label, sizeof(label), "%.2f", static_cast<double>(level.price));
+                draw_list->AddText(ImVec2(chart_pos.x + padding_left + 5, y - 12), color, label);
             }
         }
     }
