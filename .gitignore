@@ -8,6 +8,11 @@ test_database
 test_market_data
 test_order_manager
 test_integration
+test_threading
+test_async_io
+
+# Debug symbols
+*.dSYM/
 
 # Database files
 *.db
