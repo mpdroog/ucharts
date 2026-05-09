@@ -423,8 +423,24 @@ int main(int argc, char** argv) {
 
     constexpr auto TARGET_FRAME_TIME = std::chrono::milliseconds(16);  // ~60 FPS
 
+    // CPU profiling counters
+    int frame_count = 0;
+    auto last_profile_time = std::chrono::steady_clock::now();
+
     while (glfwWindowShouldClose(window) == GLFW_FALSE) {
         auto frame_start = std::chrono::steady_clock::now();
+
+        // Log frame rate every 5 seconds
+        frame_count++;
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_profile_time).count();
+        if (elapsed >= 5) {
+            float fps = static_cast<float>(frame_count) / static_cast<float>(elapsed);
+            LOG_I("perf", "Main loop: %.1f FPS (%d frames in %lld sec)",
+                  static_cast<double>(fps), frame_count, static_cast<long long>(elapsed));
+            frame_count = 0;
+            last_profile_time = now;
+        }
 
         glfwPollEvents();
 

@@ -1073,8 +1073,27 @@ bool ChartWidget::render(ImVec2 size) {
                 ImVec2(x, axis_y - 2), make_color(60, 60, 60));
 
             const char* ts = m_candles[static_cast<size_t>(i)].timestamp;
-            ImVec2 text_size = ImGui::CalcTextSize(ts);
-            draw_list->AddText(ImVec2(x - text_size.x / 2, axis_y), make_color(120, 120, 120), ts);
+            char label[16];
+            if (m_timeframe == Timeframe::DAILY) {
+                // For daily: show MM-DD (extract from "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS")
+                if (std::strlen(ts) >= 10) {
+                    std::snprintf(label, sizeof(label), "%.5s", ts + 5);  // "MM-DD"
+                } else {
+                    std::snprintf(label, sizeof(label), "%s", ts);
+                }
+            } else {
+                // For intraday: show HH:MM (extract time part)
+                const char* time_part = std::strchr(ts, ' ');
+                if (time_part != nullptr) {
+                    time_part++;  // Skip space
+                } else {
+                    time_part = ts;  // No space, assume it's just time
+                }
+                // Copy just HH:MM (5 chars)
+                std::snprintf(label, sizeof(label), "%.5s", time_part);
+            }
+            ImVec2 text_size = ImGui::CalcTextSize(label);
+            draw_list->AddText(ImVec2(x - text_size.x / 2, axis_y), make_color(120, 120, 120), label);
         }
     }
 

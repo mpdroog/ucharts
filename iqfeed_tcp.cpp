@@ -593,13 +593,29 @@ bool IQFeedLevel1::get_quote(const char* symbol, L1Quote& quote) EXCLUDES(m_mute
 void IQFeedLevel1::stream_thread() {
     std::string line;
     int msg_count = 0;
+    int total_msgs = 0;
+    int loop_count = 0;
+    auto last_log = std::chrono::steady_clock::now();
 
     while (m_running && m_socket >= 0) {
+        loop_count++;
+
+        // Log stats every 5 seconds
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_log).count();
+        if (elapsed >= 5) {
+            LOG_I("perf", "L1 thread: %d loops, %d msgs in %lld sec", loop_count, total_msgs, static_cast<long long>(elapsed));
+            loop_count = 0;
+            total_msgs = 0;
+            last_log = now;
+        }
+
         // Block up to 30 seconds waiting for data (shutdown() will wake us on disconnect)
-        if (read_line(m_socket, line, 30000)) {
+        if (read_line(m_socket, line, 1000)) {
             if (!line.empty()) {
                 parse_l1_message(line);
                 msg_count++;
+                total_msgs++;
                 // Yield CPU every 100 messages to prevent hogging when data streams fast
                 if (msg_count >= 100) {
                     msg_count = 0;
@@ -834,13 +850,29 @@ bool IQFeedLevel2::get_book(const char* symbol, std::vector<L2Level>& bids, std:
 void IQFeedLevel2::stream_thread() {
     std::string line;
     int msg_count = 0;
+    int total_msgs = 0;
+    int loop_count = 0;
+    auto last_log = std::chrono::steady_clock::now();
 
     while (m_running && m_socket >= 0) {
+        loop_count++;
+
+        // Log stats every 5 seconds
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_log).count();
+        if (elapsed >= 5) {
+            LOG_I("perf", "L2 thread: %d loops, %d msgs in %lld sec", loop_count, total_msgs, static_cast<long long>(elapsed));
+            loop_count = 0;
+            total_msgs = 0;
+            last_log = now;
+        }
+
         // Block up to 30 seconds waiting for data (shutdown() will wake us on disconnect)
-        if (read_line(m_socket, line, 30000)) {
+        if (read_line(m_socket, line, 1000)) {
             if (!line.empty()) {
                 parse_l2_message(line);
                 msg_count++;
+                total_msgs++;
                 // Yield CPU every 100 messages to prevent hogging when data streams fast
                 if (msg_count >= 100) {
                     msg_count = 0;
