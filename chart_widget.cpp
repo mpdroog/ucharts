@@ -11,12 +11,23 @@ ChartWidget::ChartWidget()
       m_timeframe(Timeframe::DAILY),
       m_hovered_candle(-1), m_is_panning(false), m_pan_start_x(0), m_pan_start_pan(0),
       m_dragging_hline(-1), m_dragging_trendline(-1), m_dragging_trendline_point(-1),
-      m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0) {
+      m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0),
+      m_indicators_dirty(true) {
+}
+
+void ChartWidget::set_symbol(const char* symbol) {
+    if (symbol == nullptr) symbol = "";
+    if (m_symbol != symbol) {
+        m_symbol = symbol;
+        m_indicators_dirty = true;
+    }
 }
 
 void ChartWidget::set_candles(const std::vector<Candle>& candles) {
-    m_candles = candles;
-    // Don't recalculate here - wait for set_indicator_settings or explicit call
+    // Only update if dirty (symbol changed) or data actually different
+    if (m_indicators_dirty || candles.size() != m_candles.size()) {
+        m_candles = candles;
+    }
 }
 
 void ChartWidget::set_title(const char* title) {
@@ -34,7 +45,7 @@ void ChartWidget::set_drawings(std::vector<HLine>* hlines, std::vector<TrendLine
 
 void ChartWidget::set_indicator_settings(IndicatorSettings* settings) {
     m_settings = settings;
-    recalculate_indicators();
+    m_indicators_dirty = true;
 }
 
 void ChartWidget::set_view_state(ChartViewState* state) {
@@ -214,8 +225,11 @@ void ChartWidget::draw_styled_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 c
 }
 
 bool ChartWidget::render(ImVec2 size) {
-    // Always recalculate indicators at render time to ensure current settings are used
-    recalculate_indicators();
+    // Recalculate indicators only when data or settings changed
+    if (m_indicators_dirty) {
+        recalculate_indicators();
+        m_indicators_dirty = false;
+    }
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 canvas_pos = ImGui::GetCursorScreenPos();

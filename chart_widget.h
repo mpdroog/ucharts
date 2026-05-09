@@ -20,6 +20,7 @@ public:
     ChartWidget();
 
     // Set chart data
+    void set_symbol(const char* symbol);
     void set_candles(const std::vector<Candle>& candles);
     void set_title(const char* title);
     void set_current_price(float price);
@@ -84,6 +85,8 @@ private:
     std::vector<float> m_ema_values;
     std::vector<float> m_boll_upper;
     std::vector<float> m_boll_lower;
+    bool m_indicators_dirty;  // Set when candles/settings change
+    std::string m_symbol;     // Current symbol being displayed
 
     // Helper functions
     void calculate_sma(int period);

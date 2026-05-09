@@ -230,19 +230,22 @@ static void update_charts_for_selected_ticker() {
         s_last_warned_state = load_state;
     }
 
-    // Update charts
+    // Update charts (set_symbol first to track ticker changes for dirty flag)
+    g_chart_1m.set_symbol(symbol);
     g_chart_1m.set_candles(candles_1m);
     g_chart_1m.set_title("1-Min");
     g_chart_1m.set_drawings(&state.hlines, &state.trendlines);
     g_chart_1m.set_indicator_settings(&state.indicators);
     g_chart_1m.set_view_state(&state.view_1m);
 
+    g_chart_5m.set_symbol(symbol);
     g_chart_5m.set_candles(candles_5m);
     g_chart_5m.set_title("5-Min");
     g_chart_5m.set_drawings(&state.hlines, &state.trendlines);
     g_chart_5m.set_indicator_settings(&state.indicators);
     g_chart_5m.set_view_state(&state.view_5m);
 
+    g_chart_daily.set_symbol(symbol);
     g_chart_daily.set_candles(candles_daily);
     g_chart_daily.set_title("Daily");
     g_chart_daily.set_drawings(&state.hlines, &state.trendlines);

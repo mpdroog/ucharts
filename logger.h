@@ -55,10 +55,13 @@ inline void log_msg(LogLevel level, const char* component, const char* fmt, ...)
     std::fprintf(stderr, "\n");
 }
 
-// Convenience macros
-#define LOG_D(component, ...) log_msg(LOG_DEBUG, component, __VA_ARGS__)
-#define LOG_I(component, ...) log_msg(LOG_INFO, component, __VA_ARGS__)
-#define LOG_W(component, ...) log_msg(LOG_WARN, component, __VA_ARGS__)
+// Convenience macros - check level first to avoid function call overhead
+#define LOG_D(component, ...) \
+    do { if (get_log_level() <= LOG_DEBUG) log_msg(LOG_DEBUG, component, __VA_ARGS__); } while(0)
+#define LOG_I(component, ...) \
+    do { if (get_log_level() <= LOG_INFO) log_msg(LOG_INFO, component, __VA_ARGS__); } while(0)
+#define LOG_W(component, ...) \
+    do { if (get_log_level() <= LOG_WARN) log_msg(LOG_WARN, component, __VA_ARGS__); } while(0)
 #define LOG_E(component, ...) log_msg(LOG_ERROR, component, __VA_ARGS__)
 
 #endif // LOGGER_H

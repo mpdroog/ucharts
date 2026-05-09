@@ -230,12 +230,10 @@ bool IQFeedLookup::read_until_endmsg(std::string& response, int expected_lines) 
     std::string line;
     int line_count = 0;
 
-    LOG_D("iqfeed", "Waiting for response...");
 
     // Use shorter timeout for "no more data" detection since proxy may not send ENDMSG
     while (read_line(m_socket, line, 2000)) {  // 2 second timeout between lines
         line_count++;
-        LOG_D("iqfeed", "Recv line %d: %.60s%s", line_count, line.c_str(), line.size() > 60 ? "..." : "");
 
         if (line.find("!ENDMSG!") != std::string::npos) {
             LOG_D("iqfeed", "Got ENDMSG after %d lines", line_count);
@@ -258,14 +256,10 @@ bool IQFeedLookup::read_until_endmsg(std::string& response, int expected_lines) 
 
         // If we got expected lines, stop (proxy may not send ENDMSG)
         if (expected_lines > 0 && line_count >= expected_lines) {
-            LOG_D("iqfeed", "Got expected %d lines, draining remaining data", line_count);
             // Drain any remaining data including !ENDMSG! to avoid corrupting next request
             std::string drain;
             while (read_line(m_socket, drain, 100)) {  // Short timeout
-                if (drain.find("!ENDMSG!") != std::string::npos) {
-                    LOG_D("iqfeed", "Drained !ENDMSG!");
-                    break;
-                }
+                if (drain.find("!ENDMSG!") != std::string::npos) break;
             }
             return true;
         }
@@ -401,7 +395,6 @@ void IQFeedLookup::process_request(const Request& req) EXCLUDES(m_mutex) {
             close(m_socket);
             m_socket = -1;
         } else {
-            LOG_D("iqfeed", "Got %zu bytes response", response.size());
             if (parse_historical_response(response, result.candles)) {
                 result.success = true;
             } else {
