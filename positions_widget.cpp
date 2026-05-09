@@ -151,7 +151,7 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
                 ImGui::NextColumn();
 
                 // Side with color
-                if (order.side == SIDE_BUY) {
+                if (order.side == OrderSide::BUY) {
                     ImGui::PushStyleColor(ImGuiCol_Text, make_color(0, 255, 0, 255));
                     ImGui::Text("BUY");
                     ImGui::PopStyleColor();

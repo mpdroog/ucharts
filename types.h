@@ -28,38 +28,38 @@ static const int MAX_LEVEL2_ROWS = 10;       // Max level 2 rows to display
 static const int MAX_TIME_SALES_ROWS = 15;   // Max time & sales rows to display
 
 // Line styles
-enum LineStyle {
-    STYLE_SOLID = 0,
-    STYLE_DASHED = 1,
-    STYLE_DOTTED = 2
+enum class LineStyle {
+    SOLID = 0,
+    DASHED = 1,
+    DOTTED = 2
 };
 
 // Chart timeframes
-enum Timeframe {
-    TF_1MIN = 0,
-    TF_5MIN = 1,
-    TF_DAILY = 2
+enum class Timeframe {
+    M1 = 0,
+    M5 = 1,
+    DAILY = 2
 };
 
-// Order side
-enum OrderSide {
-    SIDE_BUY = 'B',
-    SIDE_SELL = 'S'
+// Order side (character values for database compatibility)
+enum class OrderSide {
+    BUY = 'B',
+    SELL = 'S'
 };
 
-// Order status
-enum OrderStatus {
-    STATUS_PENDING = 'P',
-    STATUS_FILLED = 'F',
-    STATUS_PARTIAL = 'A',  // Partially filled
-    STATUS_CANCELLED = 'X'
+// Order status (character values for database compatibility)
+enum class OrderStatus {
+    PENDING = 'P',
+    FILLED = 'F',
+    PARTIAL = 'A',  // Partially filled
+    CANCELLED = 'X'
 };
 
 // Time & Sales direction
-enum TradeDirection {
-    DIR_DOWN = -1,
-    DIR_SAME = 0,
-    DIR_UP = 1
+enum class TradeDirection {
+    DOWN = -1,
+    SAME = 0,
+    UP = 1
 };
 
 // ============================================================================
@@ -99,7 +99,7 @@ struct TimeSalesEntry {
     int size;
     TradeDirection direction;
 
-    TimeSalesEntry() : price(0), size(0), direction(DIR_SAME) {
+    TimeSalesEntry() : price(0), size(0), direction(TradeDirection::SAME) {
         timestamp[0] = '\0';
     }
 };
@@ -119,13 +119,13 @@ struct Order {
     OrderStatus status;
     int64_t created_at;   // Unix timestamp
 
-    Order() : id(0), side(SIDE_BUY), quantity(0), filled(0),
-              price(0), status(STATUS_PENDING), created_at(0) {
+    Order() : id(0), side(OrderSide::BUY), quantity(0), filled(0),
+              price(0), status(OrderStatus::PENDING), created_at(0) {
         symbol[0] = '\0';
     }
 
     int pending_qty() const { return quantity - filled; }
-    bool is_complete() const { return filled >= quantity || status == STATUS_CANCELLED; }
+    bool is_complete() const { return filled >= quantity || status == OrderStatus::CANCELLED; }
 };
 
 // Open position
@@ -180,8 +180,8 @@ struct HLine {
     Timeframe source_tf;  // Timeframe where line was drawn
     bool selected;
 
-    HLine() : price(0), color(0), style(STYLE_SOLID), source_tf(TF_DAILY), selected(false) {}
-    HLine(float p, ImU32 c, LineStyle s, Timeframe tf = TF_DAILY)
+    HLine() : price(0), color(0), style(LineStyle::SOLID), source_tf(Timeframe::DAILY), selected(false) {}
+    HLine(float p, ImU32 c, LineStyle s, Timeframe tf = Timeframe::DAILY)
         : price(p), color(c), style(s), source_tf(tf), selected(false) {}
 };
 
@@ -197,7 +197,7 @@ struct TrendLine {
     bool selected;
 
     TrendLine() : candle_start(0), candle_end(0), price_start(0), price_end(0),
-                  color(0), style(STYLE_SOLID), source_tf(TF_DAILY), selected(false) {}
+                  color(0), style(LineStyle::SOLID), source_tf(Timeframe::DAILY), selected(false) {}
 };
 
 // Indicator settings
@@ -299,7 +299,7 @@ struct FullscreenState {
     bool active;
     Timeframe timeframe;
 
-    FullscreenState() : active(false), timeframe(TF_1MIN) {}
+    FullscreenState() : active(false), timeframe(Timeframe::M1) {}
 };
 
 // Global application state

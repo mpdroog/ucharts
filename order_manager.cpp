@@ -36,11 +36,11 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
     Order order;
     order.id = m_next_order_id++;
     safe_strcpy(order.symbol, symbol, sizeof(order.symbol));
-    order.side = SIDE_BUY;
+    order.side = OrderSide::BUY;
     order.quantity = quantity;
     order.filled = 0;
     order.price = price;
-    order.status = STATUS_PENDING;
+    order.status = OrderStatus::PENDING;
     order.created_at = get_current_timestamp();
 
     m_pending_orders.push_back(order);
@@ -75,11 +75,11 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
     Order order;
     order.id = m_next_order_id++;
     safe_strcpy(order.symbol, symbol, sizeof(order.symbol));
-    order.side = SIDE_SELL;
+    order.side = OrderSide::SELL;
     order.quantity = quantity;
     order.filled = 0;
     order.price = price;
-    order.status = STATUS_PENDING;
+    order.status = OrderStatus::PENDING;
     order.created_at = get_current_timestamp();
 
     m_pending_orders.push_back(order);
@@ -102,7 +102,7 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
 bool OrderManager::cancel_order(int64_t order_id) {
     for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
         if (it->id == order_id) {
-            it->status = STATUS_CANCELLED;
+            it->status = OrderStatus::CANCELLED;
 
             LOG_I("orders", "Order CANCELLED: id=%lld %s",
                   static_cast<long long>(it->id), it->symbol);
@@ -128,7 +128,7 @@ bool OrderManager::cancel_all_orders(const char* symbol) {
 
     for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ) {
         if (symbol == nullptr || symbols_equal(it->symbol, symbol)) {
-            it->status = STATUS_CANCELLED;
+            it->status = OrderStatus::CANCELLED;
 
             // Update in database
             if (m_db != nullptr && m_db->is_open()) {
@@ -199,18 +199,18 @@ void OrderManager::process_fills() {
         Order& order = *it;
         bool filled = false;
 
-        // Get current bid/ask
+        // Get current bid/ask (ignore failure - best_bid/ask stay 0 and order won't fill)
         std::vector<Level2Entry> bids, asks;
         float best_bid = 0, best_ask = 0;
-        m_market->get_level2(order.symbol, bids, asks, best_bid, best_ask);
+        (void)m_market->get_level2(order.symbol, bids, asks, best_bid, best_ask);
 
-        if (order.side == SIDE_BUY) {
+        if (order.side == OrderSide::BUY) {
             // Buy order fills if our price >= best ask
             if (best_ask > 0 && order.price >= best_ask) {
                 // Calculate fill quantity (simplified - fill entirely)
                 int fill_qty = order.quantity - order.filled;
                 order.filled = order.quantity;
-                order.status = STATUS_FILLED;
+                order.status = OrderStatus::FILLED;
 
                 LOG_I("orders", "BUY FILLED: id=%lld %s qty=%d @ %.2f",
                       static_cast<long long>(order.id), order.symbol, fill_qty, static_cast<double>(order.price));
@@ -224,7 +224,7 @@ void OrderManager::process_fills() {
             if (best_bid > 0 && order.price <= best_bid) {
                 int fill_qty = order.quantity - order.filled;
                 order.filled = order.quantity;
-                order.status = STATUS_FILLED;
+                order.status = OrderStatus::FILLED;
 
                 LOG_I("orders", "SELL FILLED: id=%lld %s qty=%d @ %.2f",
                       static_cast<long long>(order.id), order.symbol, fill_qty, static_cast<double>(order.price));

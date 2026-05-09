@@ -287,7 +287,7 @@ bool IQFeedLookup::has_pending_requests() const {
 
 void IQFeedLookup::fetch_daily(const char* symbol, int datapoints, void* user_data) {
     Request req;
-    req.type = LOOKUP_REQ_DAILY;
+    req.type = LookupRequestType::DAILY;
     to_uppercase(req.symbol, symbol, sizeof(req.symbol));
     req.datapoints = datapoints;
     req.interval_secs = 0;
@@ -304,7 +304,7 @@ void IQFeedLookup::fetch_daily(const char* symbol, int datapoints, void* user_da
 
 void IQFeedLookup::fetch_interval(const char* symbol, int interval_secs, int datapoints, void* user_data) {
     Request req;
-    req.type = LOOKUP_REQ_INTERVAL;
+    req.type = LookupRequestType::INTERVAL;
     to_uppercase(req.symbol, symbol, sizeof(req.symbol));
     req.datapoints = datapoints;
     req.interval_secs = interval_secs;
@@ -370,7 +370,7 @@ void IQFeedLookup::process_request(const Request& req) {
     char cmd[128];
     int expected_lines = req.datapoints;
 
-    if (req.type == LOOKUP_REQ_DAILY) {
+    if (req.type == LookupRequestType::DAILY) {
         std::snprintf(cmd, sizeof(cmd), "HDX,%s,%d\r\n", req.symbol, req.datapoints);
         LOG_D("iqfeed", "Sending: HDX,%s,%d", req.symbol, req.datapoints);
     } else {

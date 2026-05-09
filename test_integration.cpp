@@ -167,7 +167,7 @@ TEST(market_data_and_order_manager_integration) {
     OrderManager order_mgr;
 
     ASSERT(db.init(TEST_DB));
-    market.set_data_source(SOURCE_FILE);
+    market.set_data_source(DataSourceMode::FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
@@ -175,7 +175,7 @@ TEST(market_data_and_order_manager_integration) {
     // Get best bid/ask
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    market.get_level2("TEST", bids, asks, best_bid, best_ask);
+    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     ASSERT(best_bid > 0);
     ASSERT(best_ask > 0);
@@ -206,7 +206,7 @@ TEST(full_trading_workflow) {
     OrderManager order_mgr;
 
     ASSERT(db.init(TEST_DB));
-    market.set_data_source(SOURCE_FILE);
+    market.set_data_source(DataSourceMode::FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
@@ -214,7 +214,7 @@ TEST(full_trading_workflow) {
     // Get market prices
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    market.get_level2("TEST", bids, asks, best_bid, best_ask);
+    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     // Step 1: Buy 100 shares
     int64_t buy_order = order_mgr.buy("TEST", 100, best_ask);
@@ -286,8 +286,8 @@ TEST(session_persistence) {
 
         // Save drawings
         std::vector<HLine> hlines;
-        hlines.push_back(HLine(150.0f, 0xFF0000FF, STYLE_SOLID));
-        hlines.push_back(HLine(155.0f, 0x00FF00FF, STYLE_DASHED));
+        hlines.push_back(HLine(150.0f, 0xFF0000FF, LineStyle::SOLID));
+        hlines.push_back(HLine(155.0f, 0x00FF00FF, LineStyle::DASHED));
         ASSERT(db.save_hlines("AAPL", hlines));
 
         db.close();
@@ -327,25 +327,25 @@ TEST(session_persistence) {
 
 TEST(market_data_candles_all_timeframes) {
     MarketData market;
-    market.set_data_source(SOURCE_FILE);
+    market.set_data_source(DataSourceMode::FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
 
     std::vector<Candle> candles;
 
     // Test 1-minute candles
-    ASSERT(market.get_candles("TEST", TF_1MIN, candles, MAX_CANDLES));
+    ASSERT(market.get_candles("TEST", Timeframe::M1, candles, MAX_CANDLES));
     ASSERT_EQ(candles.size(), 2u);
     ASSERT(candles[0].open > 99.0f && candles[0].open < 101.0f);
 
     // Test 5-minute candles
     candles.clear();
-    ASSERT(market.get_candles("TEST", TF_5MIN, candles, MAX_CANDLES));
+    ASSERT(market.get_candles("TEST", Timeframe::M5, candles, MAX_CANDLES));
     ASSERT_EQ(candles.size(), 1u);
 
     // Test daily candles
     candles.clear();
-    ASSERT(market.get_candles("TEST", TF_DAILY, candles, MAX_CANDLES));
+    ASSERT(market.get_candles("TEST", Timeframe::DAILY, candles, MAX_CANDLES));
     ASSERT_EQ(candles.size(), 1u);
 }
 
@@ -355,7 +355,7 @@ TEST(calculate_sell_quantity_percentages) {
     OrderManager order_mgr;
 
     ASSERT(db.init(TEST_DB));
-    market.set_data_source(SOURCE_FILE);
+    market.set_data_source(DataSourceMode::FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
@@ -363,7 +363,7 @@ TEST(calculate_sell_quantity_percentages) {
     // Buy 400 shares
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    market.get_level2("TEST", bids, asks, best_bid, best_ask);
+    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     order_mgr.buy("TEST", 400, best_ask);
     order_mgr.process_fills();
@@ -411,7 +411,7 @@ TEST(position_pnl_calculation) {
     OrderManager order_mgr;
 
     ASSERT(db.init(TEST_DB));
-    market.set_data_source(SOURCE_FILE);
+    market.set_data_source(DataSourceMode::FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
@@ -419,7 +419,7 @@ TEST(position_pnl_calculation) {
     // Buy shares
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    market.get_level2("TEST", bids, asks, best_bid, best_ask);
+    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     order_mgr.buy("TEST", 100, best_ask);
     order_mgr.process_fills();
@@ -444,30 +444,30 @@ TEST(position_pnl_calculation) {
 
 TEST(time_sales_direction) {
     MarketData market;
-    market.set_data_source(SOURCE_FILE);
+    market.set_data_source(DataSourceMode::FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
 
     std::vector<TimeSalesEntry> ts;
-    market.get_time_sales("TEST", ts, 10);
+    ASSERT(market.get_time_sales("TEST", ts, 10));
 
     ASSERT_EQ(ts.size(), 3u);
 
     // Verify directions parsed correctly
-    ASSERT_EQ(ts[0].direction, DIR_UP);
-    ASSERT_EQ(ts[1].direction, DIR_DOWN);
-    ASSERT_EQ(ts[2].direction, DIR_SAME);
+    ASSERT_EQ(ts[0].direction, TradeDirection::UP);
+    ASSERT_EQ(ts[1].direction, TradeDirection::DOWN);
+    ASSERT_EQ(ts[2].direction, TradeDirection::SAME);
 }
 
 TEST(level2_ordering) {
     MarketData market;
-    market.set_data_source(SOURCE_FILE);
+    market.set_data_source(DataSourceMode::FILE);
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
 
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    market.get_level2("TEST", bids, asks, best_bid, best_ask);
+    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     ASSERT_EQ(bids.size(), 2u);
     ASSERT_EQ(asks.size(), 2u);

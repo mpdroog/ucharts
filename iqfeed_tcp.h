@@ -21,9 +21,9 @@ static const int IQFEED_LEVEL2_PORT = 9200;   // L2 order book
 // ============================================================================
 
 // Async fetch request types
-enum LookupRequestType {
-    LOOKUP_REQ_DAILY,
-    LOOKUP_REQ_INTERVAL
+enum class LookupRequestType {
+    DAILY,
+    INTERVAL
 };
 
 // Async fetch result
@@ -50,9 +50,9 @@ public:
     IQFeedLookup& operator=(const IQFeedLookup&) = delete;
 
     // Connect to lookup port and start worker thread
-    bool connect(const char* host = "127.0.0.1", int port = IQFEED_LOOKUP_PORT);
+    [[nodiscard]] bool connect(const char* host = "127.0.0.1", int port = IQFEED_LOOKUP_PORT);
     void disconnect();
-    bool is_connected() const;
+    [[nodiscard]] bool is_connected() const;
 
     // Async fetch - queues request and returns immediately
     // Results delivered via callback on background thread
@@ -63,10 +63,10 @@ public:
     void set_callback(LookupCallback callback);
 
     // Check if async requests are pending
-    bool has_pending_requests() const;
+    [[nodiscard]] bool has_pending_requests() const;
 
     // Get last error
-    const char* last_error() const;
+    [[nodiscard]] const char* last_error() const;
 
 private:
     // Async request
@@ -142,21 +142,21 @@ public:
     IQFeedLevel1& operator=(const IQFeedLevel1&) = delete;
 
     // Connect and start streaming thread
-    bool connect(const char* host = "127.0.0.1", int port = IQFEED_LEVEL1_PORT);
+    [[nodiscard]] bool connect(const char* host = "127.0.0.1", int port = IQFEED_LEVEL1_PORT);
     void disconnect();
-    bool is_connected() const;
+    [[nodiscard]] bool is_connected() const;
 
     // Watch/unwatch symbols
-    bool watch(const char* symbol);
-    bool unwatch(const char* symbol);
+    [[nodiscard]] bool watch(const char* symbol);
+    [[nodiscard]] bool unwatch(const char* symbol);
 
     // Set callback for quote updates
     void set_callback(L1Callback callback);
 
     // Get current quote (thread-safe)
-    bool get_quote(const char* symbol, L1Quote& quote);
+    [[nodiscard]] bool get_quote(const char* symbol, L1Quote& quote);
 
-    const char* last_error() const;
+    [[nodiscard]] const char* last_error() const;
 
 private:
     int m_socket;
@@ -202,21 +202,21 @@ public:
     IQFeedLevel2& operator=(const IQFeedLevel2&) = delete;
 
     // Connect and start streaming thread
-    bool connect(const char* host = "127.0.0.1", int port = IQFEED_LEVEL2_PORT);
+    [[nodiscard]] bool connect(const char* host = "127.0.0.1", int port = IQFEED_LEVEL2_PORT);
     void disconnect();
-    bool is_connected() const;
+    [[nodiscard]] bool is_connected() const;
 
     // Watch/unwatch symbols (max_levels typically 10)
-    bool watch(const char* symbol, int max_levels = 10);
-    bool unwatch(const char* symbol);
+    [[nodiscard]] bool watch(const char* symbol, int max_levels = 10);
+    [[nodiscard]] bool unwatch(const char* symbol);
 
     // Set callback for book updates
     void set_callback(L2Callback callback);
 
     // Get current book (thread-safe)
-    bool get_book(const char* symbol, std::vector<L2Level>& bids, std::vector<L2Level>& asks);
+    [[nodiscard]] bool get_book(const char* symbol, std::vector<L2Level>& bids, std::vector<L2Level>& asks);
 
-    const char* last_error() const;
+    [[nodiscard]] const char* last_error() const;
 
 private:
     struct BookData {

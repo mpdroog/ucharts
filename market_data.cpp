@@ -44,7 +44,7 @@ static const ImU32 g_ask_colors[] = {
 
 MarketData::MarketData()
     : m_data_dir("data"), m_api_url("http://localhost:8080"), m_tcp_host("127.0.0.1"),
-      m_source_mode(SOURCE_IQFEED), m_streams_connected(false),
+      m_source_mode(DataSourceMode::IQFEED), m_streams_connected(false),
       m_running(false), m_sim_index(0), m_current_timestamp(0) {
     m_current_time[0] = '\0';
     m_error[0] = '\0';
@@ -140,8 +140,8 @@ bool MarketData::subscribe_quotes(const char* symbol) {
 }
 
 bool MarketData::unsubscribe_quotes(const char* symbol) {
-    get_iqfeed_level1().unwatch(symbol);
-    get_iqfeed_level2().unwatch(symbol);
+    (void)get_iqfeed_level1().unwatch(symbol);
+    (void)get_iqfeed_level2().unwatch(symbol);
     return true;
 }
 
@@ -208,7 +208,7 @@ bool MarketData::has_symbol(const char* symbol) const {
     if (symbol == nullptr || symbol[0] == '\0') return false;
 
     // For API/TCP modes, assume any symbol might be valid (API will error if not)
-    if (m_source_mode == SOURCE_IQFEED || m_source_mode == SOURCE_IQFEED_HTTP) {
+    if (m_source_mode == DataSourceMode::IQFEED || m_source_mode == DataSourceMode::IQFEED_HTTP) {
         return true;
     }
 
@@ -230,14 +230,14 @@ bool MarketData::is_loading(const char* symbol) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_symbols.find(std::string(symbol));
     if (it == m_symbols.end()) return false;
-    return it->second.loading_state == LOAD_PENDING;
+    return it->second.loading_state == LoadingState::PENDING;
 }
 
 MarketData::LoadingState MarketData::get_loading_state(const char* symbol) const {
-    if (symbol == nullptr || symbol[0] == '\0') return LOAD_IDLE;
+    if (symbol == nullptr || symbol[0] == '\0') return LoadingState::IDLE;
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_symbols.find(std::string(symbol));
-    if (it == m_symbols.end()) return LOAD_IDLE;
+    if (it == m_symbols.end()) return LoadingState::IDLE;
     return it->second.loading_state;
 }
 
@@ -256,12 +256,12 @@ bool MarketData::load_symbol(const char* symbol) {
     }
 
     // Use TCP if configured (fastest)
-    if (m_source_mode == SOURCE_IQFEED) {
+    if (m_source_mode == DataSourceMode::IQFEED) {
         return load_symbol_from_tcp(symbol);
     }
 
     // Use HTTP API if configured (slower, deprecated)
-    if (m_source_mode == SOURCE_IQFEED_HTTP) {
+    if (m_source_mode == DataSourceMode::IQFEED_HTTP) {
         return load_symbol_from_http(symbol);
     }
 
@@ -404,9 +404,9 @@ bool MarketData::get_candles(const char* symbol, Timeframe tf, std::vector<Candl
     const std::vector<Candle>* src = nullptr;
 
     switch (tf) {
-        case TF_1MIN: src = &data.candles_1m; break;
-        case TF_5MIN: src = &data.candles_5m; break;
-        case TF_DAILY: src = &data.candles_daily; break;
+        case Timeframe::M1: src = &data.candles_1m; break;
+        case Timeframe::M5: src = &data.candles_5m; break;
+        case Timeframe::DAILY: src = &data.candles_daily; break;
     }
 
     if (src == nullptr || src->empty()) return false;
@@ -577,20 +577,20 @@ bool MarketData::parse_timesales_csv(const char* filepath, const char* symbol) {
         // Determine direction from string or calculate from price change
         if (parsed >= 5) {
             if (std::strcmp(dir, "UP") == 0 || dir[0] == 'U' || dir[0] == '+') {
-                entry.direction = DIR_UP;
+                entry.direction = TradeDirection::UP;
             } else if (std::strcmp(dir, "DOWN") == 0 || dir[0] == 'D' || dir[0] == '-') {
-                entry.direction = DIR_DOWN;
+                entry.direction = TradeDirection::DOWN;
             } else {
-                entry.direction = DIR_SAME;
+                entry.direction = TradeDirection::SAME;
             }
         } else {
             // Calculate from price change
             if (price > last_price) {
-                entry.direction = DIR_UP;
+                entry.direction = TradeDirection::UP;
             } else if (price < last_price) {
-                entry.direction = DIR_DOWN;
+                entry.direction = TradeDirection::DOWN;
             } else {
-                entry.direction = DIR_SAME;
+                entry.direction = TradeDirection::SAME;
             }
         }
 
@@ -667,16 +667,16 @@ bool MarketData::load_symbol_from_tcp(const char* symbol) {
         SymbolData& data = m_symbols[sym];
 
         // Already loading or loaded?
-        if (data.loading_state == LOAD_PENDING) {
+        if (data.loading_state == LoadingState::PENDING) {
             return true;  // Already loading
         }
-        if (data.loaded && data.loading_state == LOAD_COMPLETE) {
+        if (data.loaded && data.loading_state == LoadingState::COMPLETE) {
             return true;  // Already loaded
         }
 
         // Reset state for new load
         data.loaded = false;
-        data.loading_state = LOAD_PENDING;
+        data.loading_state = LoadingState::PENDING;
         data.pending_requests = 3;  // daily + 1min + 5min
         data.load_error[0] = '\0';
         data.level2_bids.clear();
@@ -698,7 +698,7 @@ bool MarketData::load_symbol_from_tcp(const char* symbol) {
         if (!lookup.connect(m_tcp_host.c_str(), IQFEED_LOOKUP_PORT)) {
             std::lock_guard<std::mutex> lock(m_mutex);
             SymbolData& data = m_symbols[sym];
-            data.loading_state = LOAD_ERROR;
+            data.loading_state = LoadingState::ERROR;
             data.pending_requests = 0;
             std::snprintf(data.load_error, sizeof(data.load_error),
                          "Failed to connect: %s", lookup.last_error());
@@ -734,7 +734,7 @@ void MarketData::on_lookup_result(const LookupResult& result) {
 
     if (result.success) {
         // Copy candles to appropriate vector
-        if (result.type == LOOKUP_REQ_DAILY) {
+        if (result.type == LookupRequestType::DAILY) {
             data.candles_daily = result.candles;
             if (!data.candles_daily.empty() && data.current_price == 0) {
                 data.current_price = data.candles_daily.back().close;
@@ -768,9 +768,9 @@ void MarketData::on_lookup_result(const LookupResult& result) {
 
         if (any_data) {
             data.loaded = true;
-            data.loading_state = LOAD_COMPLETE;
+            data.loading_state = LoadingState::COMPLETE;
         } else {
-            data.loading_state = LOAD_ERROR;
+            data.loading_state = LoadingState::ERROR;
             if (data.load_error[0] == '\0') {
                 safe_strcpy(data.load_error, "No data received", sizeof(data.load_error));
             }

@@ -8,10 +8,10 @@
 #include <string>
 
 // Drawing mode
-enum ChartDrawMode {
-    CHART_DRAW_NONE = 0,
-    CHART_DRAW_HLINE = 1,
-    CHART_DRAW_TRENDLINE = 2
+enum class ChartDrawMode {
+    NONE = 0,
+    HLINE = 1,
+    TRENDLINE = 2
 };
 
 // Chart widget for rendering candlestick charts with indicators

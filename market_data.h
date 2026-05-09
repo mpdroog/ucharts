@@ -9,10 +9,10 @@
 #include <mutex>
 
 // Data source mode
-enum DataSourceMode {
-    SOURCE_FILE = 0,       // Load from CSV files (original behavior)
-    SOURCE_IQFEED_HTTP = 1, // Fetch from iqfeed HTTP API (deprecated)
-    SOURCE_IQFEED = 2      // Fetch from iqfeed TCP (faster)
+enum class DataSourceMode {
+    FILE = 0,          // Load from CSV files (original behavior)
+    IQFEED_HTTP = 1,   // Fetch from iqfeed HTTP API (deprecated)
+    IQFEED = 2         // Fetch from iqfeed TCP (faster)
 };
 
 
@@ -20,11 +20,11 @@ enum DataSourceMode {
 class MarketData {
 public:
     // Loading state for async operations
-    enum LoadingState {
-        LOAD_IDLE = 0,
-        LOAD_PENDING,     // Request queued
-        LOAD_COMPLETE,    // All data loaded
-        LOAD_ERROR        // Loading failed
+    enum class LoadingState {
+        IDLE = 0,
+        PENDING,      // Request queued
+        COMPLETE,     // All data loaded
+        ERROR         // Loading failed
     };
 
     MarketData();
@@ -47,48 +47,48 @@ public:
     void set_tcp_host(const char* host);
 
     // Connect to iqfeed TCP streams (L1 and L2)
-    bool connect_streams();
+    [[nodiscard]] bool connect_streams();
     void disconnect_streams();
-    bool streams_connected() const;
+    [[nodiscard]] bool streams_connected() const;
 
     // Subscribe to L1/L2 updates for a symbol
-    bool subscribe_quotes(const char* symbol);
-    bool unsubscribe_quotes(const char* symbol);
+    [[nodiscard]] bool subscribe_quotes(const char* symbol);
+    [[nodiscard]] bool unsubscribe_quotes(const char* symbol);
 
     // Update L1/L2 data from TCP streams (call periodically from main loop)
     void update_from_streams();
 
     // Check if data exists for a symbol
-    bool has_symbol(const char* symbol) const;
+    [[nodiscard]] bool has_symbol(const char* symbol) const;
 
     // Load all data for a symbol (async - returns immediately)
     // Returns true if loading started, false if already loaded/loading
-    bool load_symbol(const char* symbol);
+    [[nodiscard]] bool load_symbol(const char* symbol);
 
     // Check if a symbol is currently loading
-    bool is_loading(const char* symbol) const;
+    [[nodiscard]] bool is_loading(const char* symbol) const;
 
     // Get loading state for a symbol
-    LoadingState get_loading_state(const char* symbol) const;
+    [[nodiscard]] LoadingState get_loading_state(const char* symbol) const;
 
-    // Get loading error message (if state is LOAD_ERROR)
-    const char* get_loading_error(const char* symbol) const;
+    // Get loading error message (if state is LoadingState::ERROR)
+    [[nodiscard]] const char* get_loading_error(const char* symbol) const;
 
     // Unload symbol data
     void unload_symbol(const char* symbol);
 
     // Get current Level 2 book (aggregated, 10 levels per side)
-    bool get_level2(const char* symbol, std::vector<Level2Entry>& bids,
+    [[nodiscard]] bool get_level2(const char* symbol, std::vector<Level2Entry>& bids,
                     std::vector<Level2Entry>& asks, float& best_bid, float& best_ask);
 
     // Get recent Time & Sales entries
-    bool get_time_sales(const char* symbol, std::vector<TimeSalesEntry>& entries, int count = TIME_SALES_ROWS);
+    [[nodiscard]] bool get_time_sales(const char* symbol, std::vector<TimeSalesEntry>& entries, int count = TIME_SALES_ROWS);
 
     // Get candle data for a timeframe
-    bool get_candles(const char* symbol, Timeframe tf, std::vector<Candle>& candles, int limit = MAX_CANDLES);
+    [[nodiscard]] bool get_candles(const char* symbol, Timeframe tf, std::vector<Candle>& candles, int limit = MAX_CANDLES);
 
     // Get current price (last trade price or mid of bid/ask)
-    float get_current_price(const char* symbol) const;
+    [[nodiscard]] float get_current_price(const char* symbol) const;
 
     // Simulation control
     void start_simulation();
@@ -118,7 +118,7 @@ private:
         int pending_requests;   // Number of async requests still pending
         char load_error[128];   // Error message if loading failed
 
-        SymbolData() : current_price(0), loaded(false), loading_state(LOAD_IDLE), pending_requests(0) {
+        SymbolData() : current_price(0), loaded(false), loading_state(LoadingState::IDLE), pending_requests(0) {
             load_error[0] = '\0';
         }
     };

@@ -159,7 +159,7 @@ static void cleanup_test_data() {
 
 TEST(has_symbol_empty) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     ASSERT_FALSE(md.has_symbol(nullptr));
@@ -169,7 +169,7 @@ TEST(has_symbol_empty) {
 
 TEST(has_symbol_exists) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     ASSERT_TRUE(md.has_symbol("TEST"));
@@ -177,7 +177,7 @@ TEST(has_symbol_exists) {
 
 TEST(load_symbol_nonexistent) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     ASSERT_FALSE(md.load_symbol("NONEXISTENT"));
@@ -185,7 +185,7 @@ TEST(load_symbol_nonexistent) {
 
 TEST(load_symbol_success) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     ASSERT_TRUE(md.load_symbol("TEST"));
@@ -193,7 +193,7 @@ TEST(load_symbol_success) {
 
 TEST(get_level2) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -221,7 +221,7 @@ TEST(get_level2) {
 
 TEST(get_level2_exchange_names) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -237,7 +237,7 @@ TEST(get_level2_exchange_names) {
 
 TEST(get_level2_sizes) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -253,7 +253,7 @@ TEST(get_level2_sizes) {
 
 TEST(get_level2_colors) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -270,7 +270,7 @@ TEST(get_level2_colors) {
 
 TEST(get_time_sales) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -282,23 +282,23 @@ TEST(get_time_sales) {
 
 TEST(time_sales_direction) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
     std::vector<TimeSalesEntry> entries;
     ASSERT_TRUE(md.get_time_sales("TEST", entries, 15));
 
-    ASSERT_EQ(entries[0].direction, DIR_SAME);
-    ASSERT_EQ(entries[1].direction, DIR_UP);
-    ASSERT_EQ(entries[2].direction, DIR_DOWN);
-    ASSERT_EQ(entries[3].direction, DIR_SAME);
-    ASSERT_EQ(entries[4].direction, DIR_UP);
+    ASSERT_EQ(entries[0].direction, TradeDirection::SAME);
+    ASSERT_EQ(entries[1].direction, TradeDirection::UP);
+    ASSERT_EQ(entries[2].direction, TradeDirection::DOWN);
+    ASSERT_EQ(entries[3].direction, TradeDirection::SAME);
+    ASSERT_EQ(entries[4].direction, TradeDirection::UP);
 }
 
 TEST(time_sales_prices) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -312,7 +312,7 @@ TEST(time_sales_prices) {
 
 TEST(time_sales_timestamps) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -325,12 +325,12 @@ TEST(time_sales_timestamps) {
 
 TEST(get_candles_daily) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
     std::vector<Candle> candles;
-    ASSERT_TRUE(md.get_candles("TEST", TF_DAILY, candles, 200));
+    ASSERT_TRUE(md.get_candles("TEST", Timeframe::DAILY, candles, 200));
 
     ASSERT_EQ(candles.size(), 5u);
 
@@ -341,36 +341,36 @@ TEST(get_candles_daily) {
 
 TEST(get_candles_1m) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
     std::vector<Candle> candles;
-    ASSERT_TRUE(md.get_candles("TEST", TF_1MIN, candles, 200));
+    ASSERT_TRUE(md.get_candles("TEST", Timeframe::M1, candles, 200));
 
     ASSERT_EQ(candles.size(), 3u);
 }
 
 TEST(get_candles_5m) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
     std::vector<Candle> candles;
-    ASSERT_TRUE(md.get_candles("TEST", TF_5MIN, candles, 200));
+    ASSERT_TRUE(md.get_candles("TEST", Timeframe::M5, candles, 200));
 
     ASSERT_EQ(candles.size(), 2u);
 }
 
 TEST(get_candles_limit) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
     std::vector<Candle> candles;
-    ASSERT_TRUE(md.get_candles("TEST", TF_DAILY, candles, 3));
+    ASSERT_TRUE(md.get_candles("TEST", Timeframe::DAILY, candles, 3));
 
     ASSERT_EQ(candles.size(), 3u);
     // Should get the last 3 candles
@@ -379,7 +379,7 @@ TEST(get_candles_limit) {
 
 TEST(get_current_price) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
@@ -389,18 +389,18 @@ TEST(get_current_price) {
 
 TEST(unload_symbol) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
     ASSERT_TRUE(md.load_symbol("TEST"));
 
     std::vector<Candle> candles;
-    ASSERT_TRUE(md.get_candles("TEST", TF_DAILY, candles, 200));
+    ASSERT_TRUE(md.get_candles("TEST", Timeframe::DAILY, candles, 200));
     ASSERT_TRUE(candles.size() > 0);
 
     md.unload_symbol("TEST");
 
     candles.clear();
-    ASSERT_FALSE(md.get_candles("TEST", TF_DAILY, candles, 200));
+    ASSERT_FALSE(md.get_candles("TEST", Timeframe::DAILY, candles, 200));
 }
 
 TEST(simulation_control) {
@@ -416,7 +416,7 @@ TEST(simulation_control) {
 
 TEST(empty_symbol_returns_false) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
     md.set_data_dir(TEST_DATA_DIR);
 
     std::vector<Level2Entry> bids, asks;
@@ -428,7 +428,7 @@ TEST(empty_symbol_returns_false) {
     ASSERT_FALSE(md.get_time_sales("", ts));
 
     std::vector<Candle> candles;
-    ASSERT_FALSE(md.get_candles("", TF_DAILY, candles));
+    ASSERT_FALSE(md.get_candles("", Timeframe::DAILY, candles));
 }
 
 // ============================================================================

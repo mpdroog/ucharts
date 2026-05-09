@@ -100,9 +100,9 @@ static void redo_drawing(int ticker_idx) {
 }
 
 // Drawing tool state
-static ChartDrawMode g_draw_mode = CHART_DRAW_NONE;
+static ChartDrawMode g_draw_mode = ChartDrawMode::NONE;
 static int g_current_color_idx = 0;
-static LineStyle g_current_style = STYLE_SOLID;
+static LineStyle g_current_style = LineStyle::SOLID;
 
 // Get current NYC time string
 static void get_nyc_time(char* buf, size_t buf_size) {
@@ -192,11 +192,11 @@ static void update_charts_for_selected_ticker() {
 
     SymbolState& state = g_symbol_states[g_selected_ticker];
 
-    // Get candle data from market data
+    // Get candle data from market data (empty is OK if data not yet loaded)
     std::vector<Candle> candles_1m, candles_5m, candles_daily;
-    g_market_data.get_candles(symbol, TF_1MIN, candles_1m, MAX_CANDLES);
-    g_market_data.get_candles(symbol, TF_5MIN, candles_5m, MAX_CANDLES);
-    g_market_data.get_candles(symbol, TF_DAILY, candles_daily, MAX_CANDLES);
+    (void)g_market_data.get_candles(symbol, Timeframe::M1, candles_1m, MAX_CANDLES);
+    (void)g_market_data.get_candles(symbol, Timeframe::M5, candles_5m, MAX_CANDLES);
+    (void)g_market_data.get_candles(symbol, Timeframe::DAILY, candles_daily, MAX_CANDLES);
 
     // Update charts
     g_chart_1m.set_candles(candles_1m);
@@ -218,9 +218,9 @@ static void update_charts_for_selected_ticker() {
     g_chart_daily.set_view_state(&state.view_daily);
 
     // Set timeframes for line thickness calculation
-    g_chart_1m.set_timeframe(TF_1MIN);
-    g_chart_5m.set_timeframe(TF_5MIN);
-    g_chart_daily.set_timeframe(TF_DAILY);
+    g_chart_1m.set_timeframe(Timeframe::M1);
+    g_chart_5m.set_timeframe(Timeframe::M5);
+    g_chart_daily.set_timeframe(Timeframe::DAILY);
 
     // Set current price (same across all timeframes)
     float current_price = g_market_data.get_current_price(symbol);
@@ -452,16 +452,16 @@ int main(int argc, char** argv) {
         ImGui::Text("Draw:");
         ImGui::SameLine();
 
-        if (ImGui::RadioButton("None", g_draw_mode == CHART_DRAW_NONE)) {
-            g_draw_mode = CHART_DRAW_NONE;
+        if (ImGui::RadioButton("None", g_draw_mode == ChartDrawMode::NONE)) {
+            g_draw_mode = ChartDrawMode::NONE;
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("HLine", g_draw_mode == CHART_DRAW_HLINE)) {
-            g_draw_mode = CHART_DRAW_HLINE;
+        if (ImGui::RadioButton("HLine", g_draw_mode == ChartDrawMode::HLINE)) {
+            g_draw_mode = ChartDrawMode::HLINE;
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("Trend", g_draw_mode == CHART_DRAW_TRENDLINE)) {
-            g_draw_mode = CHART_DRAW_TRENDLINE;
+        if (ImGui::RadioButton("Trend", g_draw_mode == ChartDrawMode::TRENDLINE)) {
+            g_draw_mode = ChartDrawMode::TRENDLINE;
         }
 
         ImGui::SameLine();
@@ -495,16 +495,16 @@ int main(int argc, char** argv) {
         ImGui::Text("  |  Style:");
         ImGui::SameLine();
 
-        if (ImGui::RadioButton("Solid", g_current_style == STYLE_SOLID)) {
-            g_current_style = STYLE_SOLID;
+        if (ImGui::RadioButton("Solid", g_current_style == LineStyle::SOLID)) {
+            g_current_style = LineStyle::SOLID;
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("Dashed", g_current_style == STYLE_DASHED)) {
-            g_current_style = STYLE_DASHED;
+        if (ImGui::RadioButton("Dashed", g_current_style == LineStyle::DASHED)) {
+            g_current_style = LineStyle::DASHED;
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("Dotted", g_current_style == STYLE_DOTTED)) {
-            g_current_style = STYLE_DOTTED;
+        if (ImGui::RadioButton("Dotted", g_current_style == LineStyle::DOTTED)) {
+            g_current_style = LineStyle::DOTTED;
         }
 
         // Clear lines button

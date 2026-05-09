@@ -319,17 +319,17 @@ bool Database::load_pending_orders(std::vector<Order>& orders) {
         order.id = sqlite3_column_int64(stmt, 0);
         safe_strcpy(order.symbol, reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)), sizeof(order.symbol));
         const char* side = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        order.side = (side && side[0] == 'S') ? SIDE_SELL : SIDE_BUY;
+        order.side = (side && side[0] == 'S') ? OrderSide::SELL : OrderSide::BUY;
         order.quantity = sqlite3_column_int(stmt, 3);
         order.filled = sqlite3_column_int(stmt, 4);
         order.price = static_cast<float>(sqlite3_column_double(stmt, 5));
         const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
         if (status) {
             switch (status[0]) {
-                case 'F': order.status = STATUS_FILLED; break;
-                case 'A': order.status = STATUS_PARTIAL; break;
-                case 'X': order.status = STATUS_CANCELLED; break;
-                default: order.status = STATUS_PENDING; break;
+                case 'F': order.status = OrderStatus::FILLED; break;
+                case 'A': order.status = OrderStatus::PARTIAL; break;
+                case 'X': order.status = OrderStatus::CANCELLED; break;
+                default: order.status = OrderStatus::PENDING; break;
             }
         }
         order.created_at = sqlite3_column_int64(stmt, 7);
@@ -362,17 +362,17 @@ bool Database::load_order_history(std::vector<Order>& orders, int limit) {
         order.id = sqlite3_column_int64(stmt, 0);
         safe_strcpy(order.symbol, reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)), sizeof(order.symbol));
         const char* side = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        order.side = (side && side[0] == 'S') ? SIDE_SELL : SIDE_BUY;
+        order.side = (side && side[0] == 'S') ? OrderSide::SELL : OrderSide::BUY;
         order.quantity = sqlite3_column_int(stmt, 3);
         order.filled = sqlite3_column_int(stmt, 4);
         order.price = static_cast<float>(sqlite3_column_double(stmt, 5));
         const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
         if (status) {
             switch (status[0]) {
-                case 'F': order.status = STATUS_FILLED; break;
-                case 'A': order.status = STATUS_PARTIAL; break;
-                case 'X': order.status = STATUS_CANCELLED; break;
-                default: order.status = STATUS_PENDING; break;
+                case 'F': order.status = OrderStatus::FILLED; break;
+                case 'A': order.status = OrderStatus::PARTIAL; break;
+                case 'X': order.status = OrderStatus::CANCELLED; break;
+                default: order.status = OrderStatus::PENDING; break;
             }
         }
         order.created_at = sqlite3_column_int64(stmt, 7);

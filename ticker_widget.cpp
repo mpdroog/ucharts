@@ -100,8 +100,8 @@ void TickerWidget::update_market_data() {
         return;
     }
 
-    m_market->get_level2(m_symbol, m_bids, m_asks, m_best_bid, m_best_ask);
-    m_market->get_time_sales(m_symbol, m_time_sales, MAX_TIME_SALES_ROWS);
+    (void)m_market->get_level2(m_symbol, m_bids, m_asks, m_best_bid, m_best_ask);
+    (void)m_market->get_time_sales(m_symbol, m_time_sales, MAX_TIME_SALES_ROWS);
 
     // Update default order price to best ask if not set
     if (m_order_price <= 0.0f && m_best_ask > 0.0f) {
@@ -215,11 +215,11 @@ bool TickerWidget::render(ImVec2 size) {
         // Show loading state or error message
         if (m_market != nullptr && m_symbol[0] != '\0') {
             MarketData::LoadingState state = m_market->get_loading_state(m_symbol);
-            if (state == MarketData::LOAD_PENDING) {
+            if (state == MarketData::LoadingState::PENDING) {
                 ImGui::PushStyleColor(ImGuiCol_Text, make_color(255, 255, 0, 255));
                 ImGui::TextUnformatted("Loading...");
                 ImGui::PopStyleColor();
-            } else if (state == MarketData::LOAD_ERROR) {
+            } else if (state == MarketData::LoadingState::ERROR) {
                 ImGui::PushStyleColor(ImGuiCol_Text, make_color(255, 100, 100, 255));
                 const char* err = m_market->get_loading_error(m_symbol);
                 ImGui::Text("Error: %s", err[0] != '\0' ? err : "Unknown error");
@@ -378,13 +378,13 @@ void TickerWidget::render_time_sales(ImVec2 size) {
             // Color based on direction
             ImU32 color;
             switch (entry.direction) {
-                case DIR_UP:
+                case TradeDirection::UP:
                     color = make_color(0, 255, 0, 255);  // Green
                     break;
-                case DIR_DOWN:
+                case TradeDirection::DOWN:
                     color = make_color(255, 0, 0, 255);  // Red
                     break;
-                case DIR_SAME:
+                case TradeDirection::SAME:
                     color = make_color(255, 255, 0, 255);  // Yellow
                     break;
             }

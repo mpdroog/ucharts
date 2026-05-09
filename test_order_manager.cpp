@@ -98,9 +98,9 @@ static void cleanup_test_data() {
 static void init_test_env() {
     unlink(TEST_DB);
     g_test_db.init(TEST_DB);
-    g_test_market.set_data_source(SOURCE_FILE);
+    g_test_market.set_data_source(DataSourceMode::FILE);
     g_test_market.set_data_dir(TEST_DATA_DIR);
-    g_test_market.load_symbol("TEST");
+    (void)g_test_market.load_symbol("TEST");  // May fail if no test data, that's OK
 }
 
 // ============================================================================
@@ -118,10 +118,10 @@ TEST(buy_order_creates_pending) {
     const auto& pending = om.get_pending_orders();
     ASSERT_EQ(pending.size(), 1u);
     ASSERT_STREQ(pending[0].symbol, "TEST");
-    ASSERT_EQ(pending[0].side, SIDE_BUY);
+    ASSERT_EQ(pending[0].side, OrderSide::BUY);
     ASSERT_EQ(pending[0].quantity, 100);
     ASSERT_FLOAT_EQ(pending[0].price, 100.10f, 0.01f);
-    ASSERT_EQ(pending[0].status, STATUS_PENDING);
+    ASSERT_EQ(pending[0].status, OrderStatus::PENDING);
 }
 
 TEST(buy_order_invalid_params) {
@@ -415,9 +415,9 @@ TEST(persistence) {
         db.init(TEST_DB);
 
         MarketData market;
-        market.set_data_source(SOURCE_FILE);
+        market.set_data_source(DataSourceMode::FILE);
         market.set_data_dir(TEST_DATA_DIR);
-        market.load_symbol("TEST");
+        ASSERT_TRUE(market.load_symbol("TEST"));
 
         OrderManager om;
         om.init(&db, &market);
@@ -435,9 +435,9 @@ TEST(persistence) {
         db.init(TEST_DB);
 
         MarketData market;
-        market.set_data_source(SOURCE_FILE);
+        market.set_data_source(DataSourceMode::FILE);
         market.set_data_dir(TEST_DATA_DIR);
-        market.load_symbol("TEST");
+        ASSERT_TRUE(market.load_symbol("TEST"));
 
         OrderManager om;
         om.init(&db, &market);

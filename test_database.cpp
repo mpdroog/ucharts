@@ -161,11 +161,11 @@ TEST(save_and_load_order) {
 
     Order order;
     std::strcpy(order.symbol, "AAPL");
-    order.side = SIDE_BUY;
+    order.side = OrderSide::BUY;
     order.quantity = 100;
     order.filled = 0;
     order.price = 150.50f;
-    order.status = STATUS_PENDING;
+    order.status = OrderStatus::PENDING;
     order.created_at = 1704067200;  // 2024-01-01
 
     int64_t id = db.save_order(order);
@@ -175,7 +175,7 @@ TEST(save_and_load_order) {
     ASSERT_TRUE(db.load_pending_orders(orders));
     ASSERT_EQ(orders.size(), 1u);
     ASSERT_STREQ(orders[0].symbol, "AAPL");
-    ASSERT_EQ(orders[0].side, SIDE_BUY);
+    ASSERT_EQ(orders[0].side, OrderSide::BUY);
     ASSERT_EQ(orders[0].quantity, 100);
     ASSERT_FLOAT_EQ(orders[0].price, 150.50f, 0.01f);
 
@@ -190,11 +190,11 @@ TEST(update_order_status) {
 
     Order order;
     std::strcpy(order.symbol, "AAPL");
-    order.side = SIDE_BUY;
+    order.side = OrderSide::BUY;
     order.quantity = 100;
     order.filled = 0;
     order.price = 150.50f;
-    order.status = STATUS_PENDING;
+    order.status = OrderStatus::PENDING;
     order.created_at = 1704067200;
 
     order.id = db.save_order(order);
@@ -202,7 +202,7 @@ TEST(update_order_status) {
 
     // Update to filled
     order.filled = 100;
-    order.status = STATUS_FILLED;
+    order.status = OrderStatus::FILLED;
     ASSERT_TRUE(db.update_order(order));
 
     // Should no longer be in pending
@@ -215,7 +215,7 @@ TEST(update_order_status) {
     ASSERT_TRUE(db.load_order_history(history));
     ASSERT_EQ(history.size(), 1u);
     ASSERT_EQ(history[0].filled, 100);
-    ASSERT_EQ(history[0].status, STATUS_FILLED);
+    ASSERT_EQ(history[0].status, OrderStatus::FILLED);
 
     db.close();
     cleanup_test_db();
@@ -325,9 +325,9 @@ TEST(save_and_load_hlines) {
     ASSERT_TRUE(db.init(TEST_DB));
 
     std::vector<HLine> lines;
-    lines.push_back(HLine(100.0f, 0xFF0000FF, STYLE_SOLID));
-    lines.push_back(HLine(105.0f, 0x00FF00FF, STYLE_DASHED));
-    lines.push_back(HLine(110.0f, 0x0000FFFF, STYLE_DOTTED));
+    lines.push_back(HLine(100.0f, 0xFF0000FF, LineStyle::SOLID));
+    lines.push_back(HLine(105.0f, 0x00FF00FF, LineStyle::DASHED));
+    lines.push_back(HLine(110.0f, 0x0000FFFF, LineStyle::DOTTED));
 
     ASSERT_TRUE(db.save_hlines("AAPL", lines));
 
@@ -336,9 +336,9 @@ TEST(save_and_load_hlines) {
     ASSERT_EQ(loaded.size(), 3u);
     ASSERT_FLOAT_EQ(loaded[0].price, 100.0f, 0.01f);
     ASSERT_EQ(loaded[0].color, 0xFF0000FFu);
-    ASSERT_EQ(loaded[0].style, STYLE_SOLID);
-    ASSERT_EQ(loaded[1].style, STYLE_DASHED);
-    ASSERT_EQ(loaded[2].style, STYLE_DOTTED);
+    ASSERT_EQ(loaded[0].style, LineStyle::SOLID);
+    ASSERT_EQ(loaded[1].style, LineStyle::DASHED);
+    ASSERT_EQ(loaded[2].style, LineStyle::DOTTED);
 
     db.close();
     cleanup_test_db();
@@ -350,11 +350,11 @@ TEST(hlines_per_symbol) {
     ASSERT_TRUE(db.init(TEST_DB));
 
     std::vector<HLine> aapl_lines;
-    aapl_lines.push_back(HLine(100.0f, 0xFF0000FF, STYLE_SOLID));
+    aapl_lines.push_back(HLine(100.0f, 0xFF0000FF, LineStyle::SOLID));
 
     std::vector<HLine> msft_lines;
-    msft_lines.push_back(HLine(200.0f, 0x00FF00FF, STYLE_DASHED));
-    msft_lines.push_back(HLine(210.0f, 0x00FF00FF, STYLE_DASHED));
+    msft_lines.push_back(HLine(200.0f, 0x00FF00FF, LineStyle::DASHED));
+    msft_lines.push_back(HLine(210.0f, 0x00FF00FF, LineStyle::DASHED));
 
     ASSERT_TRUE(db.save_hlines("AAPL", aapl_lines));
     ASSERT_TRUE(db.save_hlines("MSFT", msft_lines));
@@ -388,7 +388,7 @@ TEST(save_and_load_trendlines) {
     tl.price_start = 100.0f;
     tl.price_end = 110.0f;
     tl.color = 0xFFFFFFFF;
-    tl.style = STYLE_SOLID;
+    tl.style = LineStyle::SOLID;
     lines.push_back(tl);
 
     ASSERT_TRUE(db.save_trendlines("AAPL", lines));
@@ -492,11 +492,11 @@ TEST(multiple_orders_in_pending) {
     for (int i = 0; i < 5; i++) {
         Order order;
         std::snprintf(order.symbol, sizeof(order.symbol), "SYM%d", i);
-        order.side = (i % 2 == 0) ? SIDE_BUY : SIDE_SELL;
+        order.side = (i % 2 == 0) ? OrderSide::BUY : OrderSide::SELL;
         order.quantity = 100 * (i + 1);
         order.filled = 0;
         order.price = 100.0f + static_cast<float>(i);
-        order.status = STATUS_PENDING;
+        order.status = OrderStatus::PENDING;
         order.created_at = 1704067200 + i;
         ASSERT_TRUE(db.save_order(order) > 0);
     }
@@ -521,11 +521,11 @@ TEST(order_history_limit) {
     for (int i = 0; i < 10; i++) {
         Order order;
         std::strcpy(order.symbol, "AAPL");
-        order.side = SIDE_BUY;
+        order.side = OrderSide::BUY;
         order.quantity = 100;
         order.filled = 100;
         order.price = 150.0f;
-        order.status = STATUS_FILLED;
+        order.status = OrderStatus::FILLED;
         order.created_at = 1704067200 + i;
         ASSERT_TRUE(db.save_order(order) > 0);
     }

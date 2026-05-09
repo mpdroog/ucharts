@@ -89,7 +89,7 @@ TEST(fetch_interval_is_non_blocking) {
 TEST(load_symbol_is_non_blocking) {
     // Use FILE mode to avoid TCP connection for this timing test
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
 
     auto start = std::chrono::steady_clock::now();
 
@@ -129,7 +129,7 @@ TEST(callback_on_worker_thread) {
         });
 
         // Start worker thread
-        lookup.connect("127.0.0.1", IQFEED_LOOKUP_PORT);
+        (void)lookup.connect("127.0.0.1", IQFEED_LOOKUP_PORT);  // May fail, that's OK for this test
 
         // Queue a request
         lookup.fetch_daily("TEST", 10, nullptr);
@@ -176,7 +176,7 @@ TEST(multiple_requests_non_blocking) {
 TEST(loading_state_transitions) {
     // Before loading - should be IDLE
     MarketData md;
-    ASSERT_EQ(md.get_loading_state("UNKNOWN"), MarketData::LOAD_IDLE);
+    ASSERT_EQ(md.get_loading_state("UNKNOWN"), MarketData::LoadingState::IDLE);
 }
 
 // Test that is_loading returns correct state
@@ -188,7 +188,7 @@ TEST(is_loading_check) {
 // Test thread safety of concurrent load_symbol calls (file mode to avoid TCP)
 TEST(concurrent_load_calls) {
     MarketData md;
-    md.set_data_source(SOURCE_FILE);
+    md.set_data_source(DataSourceMode::FILE);
 
     std::atomic<int> call_count{0};
 
@@ -199,7 +199,7 @@ TEST(concurrent_load_calls) {
             char symbol[8];
             std::snprintf(symbol, sizeof(symbol), "SYM%d", i);
             // Will fail (no files) but tests thread safety
-            md.load_symbol(symbol);
+            (void)md.load_symbol(symbol);  // Will fail (no files), testing thread safety
             call_count++;
         });
     }

@@ -11,7 +11,7 @@ IMGUI_DIR = imgui
 UNAME_S := $(shell uname -s)
 
 # Strict compiler flags for our code
-CXXFLAGS = -std=c++11 -O2 \
+CXXFLAGS = -std=c++17 -O2 \
     -Wall -Wextra -Wpedantic -Werror \
     -Wshadow -Wdouble-promotion -Wformat=2 -Wformat-truncation \
     -Wundef -Wconversion -Wsign-conversion \
@@ -29,14 +29,14 @@ CXXFLAGS = -std=c++11 -O2 \
     -fstack-protector-strong
 
 # Relaxed flags for ImGui (third-party code)
-IMGUI_CXXFLAGS = -std=c++11 -O2 -Wall -Wextra
+IMGUI_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra
 
 # Test flags (less strict to allow test macros)
-TEST_CXXFLAGS = -std=c++11 -O2 -Wall -Wextra -Wpedantic -Werror
+TEST_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror
 
 ifeq ($(UNAME_S), Darwin)
     # macOS - clang doesn't support all GCC warnings
-    CXXFLAGS = -std=c++11 -O2 \
+    CXXFLAGS = -std=c++17 -O2 \
         -Wall -Wextra -Wpedantic -Werror \
         -Wshadow -Wdouble-promotion -Wformat=2 \
         -Wundef -Wconversion -Wsign-conversion \

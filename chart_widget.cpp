@@ -7,8 +7,8 @@
 ChartWidget::ChartWidget()
     : m_current_price(0),
       m_hlines(nullptr), m_trendlines(nullptr), m_settings(nullptr), m_view(nullptr),
-      m_draw_mode(CHART_DRAW_NONE), m_draw_color(g_chart_colors[0]), m_draw_style(STYLE_SOLID),
-      m_timeframe(TF_DAILY),
+      m_draw_mode(ChartDrawMode::NONE), m_draw_color(g_chart_colors[0]), m_draw_style(LineStyle::SOLID),
+      m_timeframe(Timeframe::DAILY),
       m_hovered_candle(-1), m_is_panning(false), m_pan_start_x(0), m_pan_start_pan(0),
       m_dragging_hline(-1), m_dragging_trendline(-1), m_dragging_trendline_point(-1),
       m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0) {
@@ -51,7 +51,7 @@ void ChartWidget::reset_view() {
 
 void ChartWidget::set_draw_mode(ChartDrawMode mode) {
     m_draw_mode = mode;
-    if (mode != CHART_DRAW_TRENDLINE) {
+    if (mode != ChartDrawMode::TRENDLINE) {
         m_trendline_drawing = false;
         m_trendline_start_candle = -1.0f;
     }
@@ -73,12 +73,12 @@ void ChartWidget::set_timeframe(Timeframe tf) {
 // Daily lines are 2x thicker on 5min/1min
 // 5min lines are 1.5x thicker on 1min
 static float get_thickness_multiplier(Timeframe source_tf, Timeframe current_tf) {
-    if (source_tf == TF_DAILY) {
-        if (current_tf == TF_5MIN || current_tf == TF_1MIN) {
+    if (source_tf == Timeframe::DAILY) {
+        if (current_tf == Timeframe::M5 || current_tf == Timeframe::M1) {
             return 2.0f;  // Daily lines are 2x thicker on lower timeframes
         }
-    } else if (source_tf == TF_5MIN) {
-        if (current_tf == TF_1MIN) {
+    } else if (source_tf == Timeframe::M5) {
+        if (current_tf == Timeframe::M1) {
             return 1.5f;  // 5min lines are 1.5x thicker on 1min
         }
     }
@@ -201,13 +201,13 @@ void ChartWidget::draw_dashed_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 c
 
 void ChartWidget::draw_styled_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 color, float thickness, LineStyle style) {
     switch (style) {
-        case STYLE_DASHED:
+        case LineStyle::DASHED:
             draw_dashed_line(dl, p1, p2, color, thickness, 8.0f);
             break;
-        case STYLE_DOTTED:
+        case LineStyle::DOTTED:
             draw_dashed_line(dl, p1, p2, color, thickness, 3.0f);
             break;
-        case STYLE_SOLID:
+        case LineStyle::SOLID:
             dl->AddLine(p1, p2, color, thickness);
             break;
     }
@@ -388,7 +388,7 @@ bool ChartWidget::render(ImVec2 size) {
     }
 
     // Handle pan with left drag
-    if (m_draw_mode == CHART_DRAW_NONE && m_dragging_hline < 0 && m_dragging_trendline < 0) {
+    if (m_draw_mode == ChartDrawMode::NONE && m_dragging_hline < 0 && m_dragging_trendline < 0) {
         if (is_active && !m_is_panning && !double_clicked) {
             // Start panning
             m_is_panning = true;
@@ -555,7 +555,7 @@ bool ChartWidget::render(ImVec2 size) {
                 draw_list->AddText(ImVec2(chart_pos.x + canvas_size.x - padding_right + 5, y - 6), hl.color, label);
 
                 // Check for hover/drag
-                if (is_hovered && m_draw_mode == CHART_DRAW_NONE && !m_is_panning) {
+                if (is_hovered && m_draw_mode == ChartDrawMode::NONE && !m_is_panning) {
                     float dist = std::fabs(io.MousePos.y - y);
                     if (dist < 5.0f) {
                         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
@@ -601,7 +601,7 @@ bool ChartWidget::render(ImVec2 size) {
             }
 
             // Check for drag on endpoints
-            if (is_hovered && m_draw_mode == CHART_DRAW_NONE && !m_is_panning && m_dragging_hline < 0) {
+            if (is_hovered && m_draw_mode == ChartDrawMode::NONE && !m_is_panning && m_dragging_hline < 0) {
                 float dist1 = std::sqrt((io.MousePos.x - x1) * (io.MousePos.x - x1) + (io.MousePos.y - y1) * (io.MousePos.y - y1));
                 float dist2 = std::sqrt((io.MousePos.x - x2) * (io.MousePos.x - x2) + (io.MousePos.y - y2) * (io.MousePos.y - y2));
                 if (dist1 < 8.0f || dist2 < 8.0f) {
@@ -646,7 +646,7 @@ bool ChartWidget::render(ImVec2 size) {
     }
 
     // Handle drawing
-    if (m_draw_mode == CHART_DRAW_HLINE && is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && m_hlines) {
+    if (m_draw_mode == ChartDrawMode::HLINE && is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && m_hlines) {
         float click_y = io.MousePos.y;
         if (click_y >= chart_pos.y + padding_top && click_y <= chart_pos.y + main_chart_height - padding_top) {
             HLine new_line(yToPrice(click_y), m_draw_color, m_draw_style, m_timeframe);
@@ -654,7 +654,7 @@ bool ChartWidget::render(ImVec2 size) {
         }
     }
 
-    if (m_draw_mode == CHART_DRAW_TRENDLINE && is_hovered && m_trendlines) {
+    if (m_draw_mode == ChartDrawMode::TRENDLINE && is_hovered && m_trendlines) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             float candle_f = xToCandle(io.MousePos.x);
             // Clamp to valid range but keep as float for exact positioning
