@@ -100,6 +100,7 @@ private:
     const std::vector<Candle>* m_daily_candles;  // Pointer to daily candles for S/R calc
     std::vector<AutoSRLevel> m_auto_sr_levels;
     bool m_sr_dirty;
+    size_t m_prev_daily_size;  // Track size changes to avoid recalc every frame
 
     // Helper functions
     void calculate_auto_sr();

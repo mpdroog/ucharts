@@ -27,6 +27,8 @@
 #include <vector>
 #include <algorithm>
 #include <string>
+#include <thread>
+#include <chrono>
 
 // Global state
 static Database g_database;
@@ -54,6 +56,14 @@ struct SymbolState {
     ChartViewState view_1m;
     ChartViewState view_5m;
     ChartViewState view_daily;
+
+    SymbolState() {
+        symbol[0] = '\0';
+        // Zoom in on intraday charts by default
+        view_1m.zoom = 18.0f;
+        view_5m.zoom = 12.0f;
+        view_daily.zoom = 1.0f;
+    }
 };
 static SymbolState g_symbol_states[NUM_TICKERS];
 
@@ -411,7 +421,11 @@ int main(int argc, char** argv) {
     g_ticker_widgets[0].set_selected(true);
     g_selected_ticker = 0;
 
+    constexpr auto TARGET_FRAME_TIME = std::chrono::milliseconds(16);  // ~60 FPS
+
     while (glfwWindowShouldClose(window) == GLFW_FALSE) {
+        auto frame_start = std::chrono::steady_clock::now();
+
         glfwPollEvents();
 
         ImGui_ImplOpenGL3_NewFrame();
@@ -738,6 +752,13 @@ int main(int argc, char** argv) {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
+
+        // Limit frame rate to reduce CPU usage
+        auto frame_end = std::chrono::steady_clock::now();
+        auto frame_duration = frame_end - frame_start;
+        if (frame_duration < TARGET_FRAME_TIME) {
+            std::this_thread::sleep_for(TARGET_FRAME_TIME - frame_duration);
+        }
     }
 
     // Save session before exit

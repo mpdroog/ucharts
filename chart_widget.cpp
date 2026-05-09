@@ -12,7 +12,7 @@ ChartWidget::ChartWidget()
       m_hovered_candle(-1), m_is_panning(false), m_pan_start_x(0), m_pan_start_pan(0),
       m_dragging_hline(-1), m_dragging_trendline(-1), m_dragging_trendline_point(-1),
       m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0),
-      m_indicators_dirty(true), m_daily_candles(nullptr), m_sr_dirty(true) {
+      m_indicators_dirty(true), m_daily_candles(nullptr), m_sr_dirty(true), m_prev_daily_size(0) {
 }
 
 void ChartWidget::set_symbol(const char* symbol) {
@@ -34,12 +34,13 @@ void ChartWidget::set_candles(const std::vector<Candle>& candles) {
 void ChartWidget::set_daily_candles(const std::vector<Candle>* daily_candles) {
     size_t new_size = daily_candles ? daily_candles->size() : 0;
 
-    // Always update the pointer
+    // Update the pointer
     m_daily_candles = daily_candles;
 
-    // Recalculate if we have data but no levels yet, or if size changed
-    if (new_size >= 3 && m_auto_sr_levels.empty()) {
+    // Only recalculate if size actually changed and we have enough data
+    if (new_size != m_prev_daily_size && new_size >= 3) {
         m_sr_dirty = true;
+        m_prev_daily_size = new_size;
     }
 }
 
@@ -348,9 +349,8 @@ bool ChartWidget::render(ImVec2 size) {
         m_indicators_dirty = false;
     }
 
-    // Recalculate auto S/R from daily candles
-    // Also recalculate if we have data but no levels (handles initial load timing)
-    if (m_sr_dirty || (m_daily_candles && m_daily_candles->size() >= 3 && m_auto_sr_levels.empty())) {
+    // Recalculate auto S/R from daily candles (only when dirty flag is set)
+    if (m_sr_dirty) {
         calculate_auto_sr();
         m_sr_dirty = false;
     }
@@ -365,7 +365,7 @@ bool ChartWidget::render(ImVec2 size) {
     // Get view state
     ChartViewState* view = m_view ? m_view : &m_default_view;
     const float ZOOM_MIN = 0.1f;
-    const float ZOOM_MAX = 10.0f;
+    const float ZOOM_MAX = 30.0f;
 
     // Layout constants
     const float padding_left = 10.0f;
@@ -419,7 +419,15 @@ bool ChartWidget::render(ImVec2 size) {
     // Calculate visible range
     float total_candles = static_cast<float>(m_candles.size());
     float visible_candles = total_candles / view->zoom;
-    float max_pan = std::max(0.0f, total_candles - visible_candles);
+    // Allow scrolling 30% past the right edge for some breathing room
+    float extra_scroll = visible_candles * 0.3f;
+    float rightmost_pan = std::max(0.0f, total_candles - visible_candles);
+    float max_pan = rightmost_pan + extra_scroll;
+
+    // Default to showing latest candles (pan_x < 0 means "show latest")
+    if (view->pan_x < 0.0f) {
+        view->pan_x = rightmost_pan;  // Position so last candle is at right edge
+    }
     view->pan_x = std::max(0.0f, std::min(view->pan_x, max_pan));
 
     float start_candle = view->pan_x;

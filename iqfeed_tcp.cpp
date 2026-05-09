@@ -5,6 +5,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include <thread>
+#include <chrono>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -590,14 +592,23 @@ bool IQFeedLevel1::get_quote(const char* symbol, L1Quote& quote) EXCLUDES(m_mute
 
 void IQFeedLevel1::stream_thread() {
     std::string line;
+    int msg_count = 0;
 
     while (m_running && m_socket >= 0) {
-        if (read_line(m_socket, line, 1000)) {
+        // Block up to 30 seconds waiting for data (shutdown() will wake us on disconnect)
+        if (read_line(m_socket, line, 30000)) {
             if (!line.empty()) {
                 parse_l1_message(line);
+                msg_count++;
+                // Yield CPU every 100 messages to prevent hogging when data streams fast
+                if (msg_count >= 100) {
+                    msg_count = 0;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
             }
         }
     }
+    LOG_I("iqfeed", "L1 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
 }
 
 void IQFeedLevel1::parse_l1_message(const std::string& line) {
@@ -822,14 +833,23 @@ bool IQFeedLevel2::get_book(const char* symbol, std::vector<L2Level>& bids, std:
 
 void IQFeedLevel2::stream_thread() {
     std::string line;
+    int msg_count = 0;
 
     while (m_running && m_socket >= 0) {
-        if (read_line(m_socket, line, 1000)) {
+        // Block up to 30 seconds waiting for data (shutdown() will wake us on disconnect)
+        if (read_line(m_socket, line, 30000)) {
             if (!line.empty()) {
                 parse_l2_message(line);
+                msg_count++;
+                // Yield CPU every 100 messages to prevent hogging when data streams fast
+                if (msg_count >= 100) {
+                    msg_count = 0;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
             }
         }
     }
+    LOG_I("iqfeed", "L2 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
 }
 
 void IQFeedLevel2::parse_l2_message(const std::string& line) {

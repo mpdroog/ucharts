@@ -233,11 +233,11 @@ struct IndicatorSettings {
 // Chart zoom/pan state
 struct ChartViewState {
     float zoom;
-    float pan_x;
+    float pan_x;  // -1 means "show latest candles"
 
-    ChartViewState() : zoom(1.0f), pan_x(0.0f) {}
+    ChartViewState() : zoom(1.0f), pan_x(-1.0f) {}
 
-    void reset() { zoom = 1.0f; pan_x = 0.0f; }
+    void reset() { zoom = 1.0f; pan_x = -1.0f; }
 };
 
 // Per-symbol chart state (persisted)
@@ -248,6 +248,13 @@ struct SymbolChartState {
     ChartViewState view_1m;
     ChartViewState view_5m;
     ChartViewState view_daily;
+
+    SymbolChartState() {
+        // Zoom in more on intraday charts by default
+        view_1m.zoom = 18.0f;  // Show ~1/18 of candles (most recent ~20 mins)
+        view_5m.zoom = 12.0f;  // Show ~1/12 of candles
+        view_daily.zoom = 1.0f; // Show all candles
+    }
 };
 
 // Ticker window state
