@@ -503,7 +503,23 @@ int main(int argc, char** argv) {
         float window_width = io.DisplaySize.x;
         float window_height = io.DisplaySize.y;
 
-        // Top bar with clock
+        // Top bar with connection status and clock
+        // Connection status indicators (left side)
+        bool l1_ok = get_iqfeed_level1().is_connected();
+        bool l2_ok = get_iqfeed_level2().is_connected();
+        bool lu_ok = get_iqfeed_lookup().is_connected();
+
+        ImVec4 col_green(0.0f, 0.8f, 0.0f, 1.0f);
+        ImVec4 col_red(0.8f, 0.0f, 0.0f, 1.0f);
+
+        ImGui::TextColored(l1_ok ? col_green : col_red, "L1");
+        ImGui::SameLine();
+        ImGui::TextColored(l2_ok ? col_green : col_red, "L2");
+        ImGui::SameLine();
+        ImGui::TextColored(lu_ok ? col_green : col_red, "LU");
+        ImGui::SameLine();
+
+        // Clock (centered)
         char time_str[32];
         get_nyc_time(time_str, sizeof(time_str));
 

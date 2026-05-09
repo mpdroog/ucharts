@@ -219,9 +219,12 @@ private:
     std::map<std::string, L1Quote> m_quotes GUARDED_BY(m_mutex);
     L1Callback m_callback GUARDED_BY(m_mutex);
     char m_error[256];
+    char m_host[64];
+    int m_port;
 
     void stream_thread();
     bool send_command(const char* cmd);
+    bool reconnect();  // Attempt to reconnect
     void parse_l1_message(const std::string& line);
     // IMPORTANT: These methods must NOT invoke callbacks while holding m_mutex
     void parse_summary_message(const char* data) EXCLUDES(m_mutex);
@@ -285,9 +288,12 @@ private:
     std::map<std::string, BookData> m_books GUARDED_BY(m_mutex);
     L2Callback m_callback GUARDED_BY(m_mutex);
     char m_error[256];
+    char m_host[64];
+    int m_port;
 
     void stream_thread();
     bool send_command(const char* cmd);
+    bool reconnect();  // Attempt to reconnect
     void parse_l2_message(const std::string& line);
     // IMPORTANT: These methods must NOT invoke callbacks while holding m_mutex
     void parse_level_summary(const char* data) EXCLUDES(m_mutex);

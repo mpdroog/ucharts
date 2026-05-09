@@ -76,7 +76,8 @@ static int connect_tcp(const char* host, int port, char* error, size_t error_siz
     return sock;
 }
 
-static bool read_line(int sock, std::string& line, int timeout_ms = 5000) {
+// Returns: 1 = got line, 0 = timeout, -1 = error/disconnected
+static int read_line_ex(int sock, std::string& line, int timeout_ms = 5000) {
     line.clear();
     char buf[1];
 
@@ -86,20 +87,30 @@ static bool read_line(int sock, std::string& line, int timeout_ms = 5000) {
 
     while (true) {
         int ret = poll(&pfd, 1, timeout_ms);
-        if (ret <= 0) return false;
+        if (ret < 0) return -1;  // Error
+        if (ret == 0) return 0;   // Timeout (expected)
+
+        // Check for disconnect/error events
+        if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            return -1;
+        }
 
         ssize_t n = recv(sock, buf, 1, 0);
-        if (n <= 0) return false;
+        if (n <= 0) return -1;  // Disconnected
 
         if (buf[0] == '\n') {
             // Remove trailing \r if present
             if (!line.empty() && line.back() == '\r') {
                 line.pop_back();
             }
-            return true;
+            return 1;  // Success
         }
         line += buf[0];
     }
+}
+
+static bool read_line(int sock, std::string& line, int timeout_ms = 5000) {
+    return read_line_ex(sock, line, timeout_ms) == 1;
 }
 
 // ============================================================================
@@ -465,8 +476,9 @@ bool IQFeedLookup::parse_historical_response(const std::string& response, std::v
 // IQFeedLevel1 Implementation
 // ============================================================================
 
-IQFeedLevel1::IQFeedLevel1() : m_socket(-1), m_running(false) {
+IQFeedLevel1::IQFeedLevel1() : m_socket(-1), m_running(false), m_port(0) {
     m_error[0] = '\0';
+    m_host[0] = '\0';
 }
 
 IQFeedLevel1::~IQFeedLevel1() {
@@ -477,6 +489,10 @@ bool IQFeedLevel1::connect(const char* host, int port) {
     if (m_socket >= 0) {
         disconnect();
     }
+
+    // Store for reconnection
+    safe_strcpy(m_host, host, sizeof(m_host));
+    m_port = port;
 
     m_socket = connect_tcp(host, port, m_error, sizeof(m_error));
     if (m_socket < 0) {
@@ -492,6 +508,45 @@ bool IQFeedLevel1::connect(const char* host, int port) {
     m_running = true;
     m_thread = std::thread(&IQFeedLevel1::stream_thread, this);
 
+    return true;
+}
+
+bool IQFeedLevel1::reconnect() {
+    // Close existing socket
+    if (m_socket >= 0) {
+        close(m_socket);
+        m_socket = -1;
+    }
+
+    if (m_host[0] == '\0' || m_port == 0) {
+        return false;
+    }
+
+    LOG_I("iqfeed", "L1 reconnecting to %s:%d", m_host, m_port);
+
+    m_socket = connect_tcp(m_host, m_port, m_error, sizeof(m_error));
+    if (m_socket < 0) {
+        LOG_W("iqfeed", "L1 reconnect failed: %s", m_error);
+        return false;
+    }
+
+    if (!set_protocol()) {
+        close(m_socket);
+        m_socket = -1;
+        return false;
+    }
+
+    // Re-watch all symbols
+    {
+        MutexLock lock(m_mutex);
+        for (const auto& kv : m_quotes) {
+            char cmd[64];
+            std::snprintf(cmd, sizeof(cmd), "w%s\r\n", kv.first.c_str());
+            send_command(cmd);
+        }
+    }
+
+    LOG_I("iqfeed", "L1 reconnected successfully");
     return true;
 }
 
@@ -610,8 +665,9 @@ void IQFeedLevel1::stream_thread() {
             last_log = now;
         }
 
-        // Block up to 30 seconds waiting for data (shutdown() will wake us on disconnect)
-        if (read_line(m_socket, line, 1000)) {
+        int result = read_line_ex(m_socket, line, 1000);
+        if (result == 1) {
+            // Got a line
             if (!line.empty()) {
                 parse_l1_message(line);
                 msg_count++;
@@ -622,7 +678,16 @@ void IQFeedLevel1::stream_thread() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
             }
+        } else if (result == -1) {
+            // Error/disconnect - try to reconnect
+            if (m_running) {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                if (m_running && !reconnect()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                }
+            }
         }
+        // result == 0 is timeout, just loop again
     }
     LOG_I("iqfeed", "L1 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
 }
@@ -721,8 +786,9 @@ void IQFeedLevel1::parse_update_message(const char* data) EXCLUDES(m_mutex) {
 // IQFeedLevel2 Implementation
 // ============================================================================
 
-IQFeedLevel2::IQFeedLevel2() : m_socket(-1), m_running(false) {
+IQFeedLevel2::IQFeedLevel2() : m_socket(-1), m_running(false), m_port(0) {
     m_error[0] = '\0';
+    m_host[0] = '\0';
 }
 
 IQFeedLevel2::~IQFeedLevel2() {
@@ -733,6 +799,10 @@ bool IQFeedLevel2::connect(const char* host, int port) {
     if (m_socket >= 0) {
         disconnect();
     }
+
+    // Store for reconnection
+    safe_strcpy(m_host, host, sizeof(m_host));
+    m_port = port;
 
     m_socket = connect_tcp(host, port, m_error, sizeof(m_error));
     if (m_socket < 0) {
@@ -748,6 +818,45 @@ bool IQFeedLevel2::connect(const char* host, int port) {
     m_running = true;
     m_thread = std::thread(&IQFeedLevel2::stream_thread, this);
 
+    return true;
+}
+
+bool IQFeedLevel2::reconnect() {
+    // Close existing socket
+    if (m_socket >= 0) {
+        close(m_socket);
+        m_socket = -1;
+    }
+
+    if (m_host[0] == '\0' || m_port == 0) {
+        return false;
+    }
+
+    LOG_I("iqfeed", "L2 reconnecting to %s:%d", m_host, m_port);
+
+    m_socket = connect_tcp(m_host, m_port, m_error, sizeof(m_error));
+    if (m_socket < 0) {
+        LOG_W("iqfeed", "L2 reconnect failed: %s", m_error);
+        return false;
+    }
+
+    if (!set_protocol()) {
+        close(m_socket);
+        m_socket = -1;
+        return false;
+    }
+
+    // Re-watch all symbols
+    {
+        MutexLock lock(m_mutex);
+        for (const auto& kv : m_books) {
+            char cmd[64];
+            std::snprintf(cmd, sizeof(cmd), "w%s\r\n", kv.first.c_str());
+            send_command(cmd);
+        }
+    }
+
+    LOG_I("iqfeed", "L2 reconnected successfully");
     return true;
 }
 
@@ -867,8 +976,9 @@ void IQFeedLevel2::stream_thread() {
             last_log = now;
         }
 
-        // Block up to 30 seconds waiting for data (shutdown() will wake us on disconnect)
-        if (read_line(m_socket, line, 1000)) {
+        int result = read_line_ex(m_socket, line, 1000);
+        if (result == 1) {
+            // Got a line
             if (!line.empty()) {
                 parse_l2_message(line);
                 msg_count++;
@@ -879,7 +989,16 @@ void IQFeedLevel2::stream_thread() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
             }
+        } else if (result == -1) {
+            // Error/disconnect - try to reconnect
+            if (m_running) {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                if (m_running && !reconnect()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                }
+            }
         }
+        // result == 0 is timeout, just loop again
     }
     LOG_I("iqfeed", "L2 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
 }
