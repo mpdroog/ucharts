@@ -258,7 +258,15 @@ bool IQFeedLookup::read_until_endmsg(std::string& response, int expected_lines) 
 
         // If we got expected lines, stop (proxy may not send ENDMSG)
         if (expected_lines > 0 && line_count >= expected_lines) {
-            LOG_D("iqfeed", "Got expected %d lines, done", line_count);
+            LOG_D("iqfeed", "Got expected %d lines, draining remaining data", line_count);
+            // Drain any remaining data including !ENDMSG! to avoid corrupting next request
+            std::string drain;
+            while (read_line(m_socket, drain, 100)) {  // Short timeout
+                if (drain.find("!ENDMSG!") != std::string::npos) {
+                    LOG_D("iqfeed", "Drained !ENDMSG!");
+                    break;
+                }
+            }
             return true;
         }
     }
