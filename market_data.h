@@ -36,10 +36,16 @@ public:
     MarketData(MarketData&&) = delete;
     MarketData& operator=(MarketData&&) = delete;
 
+#ifdef MARKET_DATA_TEST_MODE
+public:
+    // Public constructor for testing only
+    MarketData();
+#else
 private:
     // Private constructor - use get_market_data() instead
     MarketData();
     friend MarketData& get_market_data();
+#endif
 
 public:
 

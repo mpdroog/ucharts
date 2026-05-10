@@ -82,8 +82,8 @@ private:
 
     // Helper functions
     void render_level1(float width);
-    void render_level2(ImVec2 size);
-    void render_time_sales(ImVec2 size);
+    void render_level2(ImVec2 size, int max_rows);
+    void render_time_sales(ImVec2 size, int max_rows);
     void render_order_entry(float width);
     void update_market_data();
     void update_time_sales_from_l1();

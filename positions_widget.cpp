@@ -24,10 +24,17 @@ void PositionsWidget::render_pnl(float pnl, float pnl_percent) {
 }
 
 void PositionsWidget::render_open_positions(ImVec2 size) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
     ImGui::TextUnformatted("Open Positions");
     ImGui::Separator();
 
-    if (ImGui::BeginChild("OpenPositions", ImVec2(size.x, size.y * 0.6f), false)) {
+    // Calculate available space
+    float used_before_child = ImGui::GetCursorPosY();
+    float pending_section_estimate = ImGui::GetTextLineHeight() + 8.0f;
+    float available = size.y - used_before_child - pending_section_estimate - 4.0f;
+
+    if (ImGui::BeginChild("OpenPositions", ImVec2(size.x, available * 0.60f), false)) {
         // Column headers
         ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
         float col_width = size.x / 7.0f;
@@ -112,11 +119,12 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
     ImGui::EndChild();
 
     // Pending orders section
-    ImGui::Spacing();
     ImGui::TextUnformatted("Pending Orders");
     ImGui::Separator();
 
-    if (ImGui::BeginChild("PendingOrders", ImVec2(size.x, size.y * 0.35f), false)) {
+    float available_pending = size.y - ImGui::GetCursorPosY() - 4.0f;
+
+    if (ImGui::BeginChild("PendingOrders", ImVec2(size.x, available_pending), false)) {
         // Column headers
         ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
         float col_width = size.x / 5.0f;
@@ -191,13 +199,20 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
         ImGui::Columns(1);
     }
     ImGui::EndChild();
+
+    ImGui::PopStyleVar(); // WindowPadding
 }
 
 void PositionsWidget::render_closed_positions(ImVec2 size) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
     ImGui::TextUnformatted("Closed Positions");
     ImGui::Separator();
 
-    if (ImGui::BeginChild("ClosedPositions", size, false)) {
+    float used = ImGui::GetCursorPosY();
+    float available = size.y - used - 4.0f;
+
+    if (ImGui::BeginChild("ClosedPositions", ImVec2(size.x, available), false)) {
         // Column headers
         ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
         float col_width = size.x / 4.0f;
@@ -246,4 +261,6 @@ void PositionsWidget::render_closed_positions(ImVec2 size) {
         ImGui::Columns(1);
     }
     ImGui::EndChild();
+
+    ImGui::PopStyleVar(); // WindowPadding
 }

@@ -290,10 +290,15 @@ bool TickerWidget::render(ImVec2 size) {
             clicked = true;
         }
 
+        // Remove all spacing/padding for maximum data density
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 1));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
         ImVec2 content_size = ImGui::GetContentRegionAvail();
         // Symbol header / input
-        float header_height = 25.0f;
-        ImGui::PushItemWidth(content_size.x - 10);
+        float header_height = 18.0f;
+        ImGui::PushItemWidth(content_size.x);
 
         if (m_editing_symbol) {
             // Edit mode - show input field
@@ -347,7 +352,7 @@ bool TickerWidget::render(ImVec2 size) {
             ImGui::PushStyleColor(ImGuiCol_Button, make_color(40, 40, 40, 255));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, make_color(60, 60, 60, 255));
 
-            if (ImGui::Button(display_text, ImVec2(content_size.x - 10, header_height))) {
+            if (ImGui::Button(display_text, ImVec2(content_size.x, header_height))) {
                 m_editing_symbol = true;
                 m_edit_frames = 0;  // Reset frame counter for focus
                 safe_strcpy(m_symbol_input, m_symbol, sizeof(m_symbol_input));
@@ -378,78 +383,75 @@ bool TickerWidget::render(ImVec2 size) {
             ImGui::PopStyleColor();
         }
 
-        ImGui::Spacing();
-
         // Level 1 display (compact quote data)
         render_level1(content_size.x);
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+        // Calculate remaining height with proper overhead budgeting
+        float used_height = ImGui::GetCursorPosY();
 
-        // Calculate remaining height for Level 2 and T&S (side by side)
-        float remaining_height = content_size.y - ImGui::GetCursorPosY() - 60.0f; // Reserve 60 for order entry
-        float panel_width = (content_size.x - 10.0f) / 2.0f;  // Split horizontally
+        // Budget for overhead (explicit constants for clarity)
+        const float CHILD_OVERHEAD = 8.0f;      // BeginChild internal space
+        const float COLUMNS_HEADER = 16.0f;     // Columns header row
+        const float SAFETY_MARGIN = 10.0f;      // Extra buffer
+        const float ORDER_ENTRY_HEIGHT = 18.0f; // Order entry buttons
 
-        // Level 2 and Time & Sales side by side
-        ImGui::BeginChild("L2TSPanel", ImVec2(content_size.x, remaining_height), false);
-        {
-            // Level 2 on left
-            ImGui::BeginChild("L2Panel", ImVec2(panel_width, remaining_height - 5.0f), false);
-            render_level2(ImVec2(panel_width - 5.0f, remaining_height - 20.0f));
-            ImGui::EndChild();
+        // Calculate available space for L2/TS content
+        float available_for_panels = content_size.y - used_height - ORDER_ENTRY_HEIGHT - SAFETY_MARGIN;
+        float panel_width = content_size.x / 2.0f;
 
-            ImGui::SameLine();
+        // Each panel needs overhead subtracted from its budget
+        float l2_available = (available_for_panels / 2.0f) - CHILD_OVERHEAD - COLUMNS_HEADER;
+        float ts_available = (available_for_panels / 2.0f) - CHILD_OVERHEAD - COLUMNS_HEADER;
 
-            // Time & Sales on right
-            ImGui::BeginChild("TSPanel", ImVec2(panel_width, remaining_height - 5.0f), false);
-            render_time_sales(ImVec2(panel_width - 5.0f, remaining_height - 20.0f));
-            ImGui::EndChild();
-        }
+        // Calculate max rows that fit (each row ~16px with FramePadding)
+        const float ROW_HEIGHT = 16.0f;
+        int max_l2_rows = static_cast<int>(l2_available / ROW_HEIGHT);
+        int max_ts_rows = static_cast<int>(ts_available / ROW_HEIGHT);
+
+        // Clamp to reasonable minimums and maximums
+        max_l2_rows = std::max(5, std::min(max_l2_rows, 20));
+        max_ts_rows = std::max(5, std::min(max_ts_rows, 30));
+
+        // Render L2 and TS directly side-by-side (NO outer L2TSPanel wrapper)
+        ImGui::BeginChild("L2Panel", ImVec2(panel_width, available_for_panels), false);
+        render_level2(ImVec2(panel_width, available_for_panels - CHILD_OVERHEAD), max_l2_rows);
         ImGui::EndChild();
 
-        ImGui::Separator();
+        ImGui::SameLine(0, 0);
 
-        // Order entry (compact)
+        ImGui::BeginChild("TSPanel", ImVec2(panel_width, available_for_panels), false);
+        render_time_sales(ImVec2(panel_width, available_for_panels - CHILD_OVERHEAD), max_ts_rows);
+        ImGui::EndChild();
+
+        // Order entry at bottom
         render_order_entry(content_size.x);
+
+        ImGui::PopStyleVar(3);  // Pop ItemSpacing, FramePadding, and WindowPadding
     }
     ImGui::EndChild();
 
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();  // ChildBorderSize
+    ImGui::PopStyleColor();  // Border color
     ImGui::PopID();
 
     return clicked;
 }
 
-void TickerWidget::render_level2(ImVec2 size) {
-    ImGui::TextUnformatted("L2");
-
+void TickerWidget::render_level2(ImVec2 size, int max_rows) {
     if (ImGui::BeginChild("Level2", size, false)) {
-        // Compact 4-column layout: Price | Size | Price | Size
+        // Ultra-compact 4-column layout: Price | Size | Price | Size
         float col_width = size.x / 4.0f;
 
-        // Headers
-        ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
         ImGui::Columns(4, "L2Header", false);
         ImGui::SetColumnWidth(0, col_width);
         ImGui::SetColumnWidth(1, col_width);
         ImGui::SetColumnWidth(2, col_width);
         ImGui::SetColumnWidth(3, col_width);
 
-        ImGui::Text("Bid");
-        ImGui::NextColumn();
-        ImGui::Text("Size");
-        ImGui::NextColumn();
-        ImGui::Text("Ask");
-        ImGui::NextColumn();
-        ImGui::Text("Size");
-        ImGui::NextColumn();
-        ImGui::PopStyleColor();
-
-        // Compact: show 6 rows max for side-by-side layout
-        size_t max_rows = 6;
-        for (size_t i = 0; i < max_rows; ++i) {
+        // Use dynamic max_rows (calculated to fit available space)
+        size_t display_rows = static_cast<size_t>(std::min(max_rows,
+                              static_cast<int>(std::max(m_bids.size(), m_asks.size()))));
+        for (size_t i = 0; i < display_rows; ++i) {
             // Bid side
             if (i < m_bids.size()) {
                 const Level2Entry& bid = m_bids[i];
@@ -488,28 +490,19 @@ void TickerWidget::render_level2(ImVec2 size) {
     ImGui::EndChild();
 }
 
-void TickerWidget::render_time_sales(ImVec2 size) {
-    ImGui::TextUnformatted("T&S");
-
+void TickerWidget::render_time_sales(ImVec2 size, int max_rows) {
     if (ImGui::BeginChild("TimeSales", size, false)) {
-        // Compact 2-column layout: Price | Size (time is less important in compact view)
+        // Ultra-compact 2-column layout: Price | Size
         float col_width = size.x / 2.0f;
 
-        // Headers
-        ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
         ImGui::Columns(2, "TSHeader", false);
         ImGui::SetColumnWidth(0, col_width);
         ImGui::SetColumnWidth(1, col_width);
 
-        ImGui::Text("Price");
-        ImGui::NextColumn();
-        ImGui::Text("Size");
-        ImGui::NextColumn();
-        ImGui::PopStyleColor();
-
-        // Compact: show 8 rows max
-        size_t max_rows = 8;
-        for (size_t i = 0; i < m_time_sales.size() && i < max_rows; ++i) {
+        // Use dynamic max_rows (calculated to fit available space)
+        size_t display_rows = static_cast<size_t>(std::min(max_rows,
+                              static_cast<int>(m_time_sales.size())));
+        for (size_t i = 0; i < display_rows; ++i) {
             const TimeSalesEntry& entry = m_time_sales[i];
 
             // Color based on direction
@@ -545,10 +538,10 @@ void TickerWidget::render_time_sales(ImVec2 size) {
 }
 
 void TickerWidget::render_order_entry(float width) {
-    // Compact order entry: Qty input + BUY/SELL buttons on one line
+    // Ultra-compact order entry: Qty input + BUY/SELL buttons on one line
     float input_width = width * 0.25f;
-    float button_width = (width - input_width - 15.0f) / 2.0f;
-    float button_height = 20.0f;
+    float button_width = (width - input_width) / 2.0f;
+    float button_height = 16.0f;
 
     ImGui::PushItemWidth(input_width);
     if (ImGui::InputText("##Qty", m_qty_input, sizeof(m_qty_input), ImGuiInputTextFlags_CharsDecimal)) {
@@ -557,7 +550,7 @@ void TickerWidget::render_order_entry(float width) {
     }
     ImGui::PopItemWidth();
 
-    ImGui::SameLine();
+    ImGui::SameLine(0, 0);
 
     ImGui::PushStyleColor(ImGuiCol_Button, make_color(0, 100, 0, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, make_color(0, 150, 0, 255));
@@ -572,7 +565,7 @@ void TickerWidget::render_order_entry(float width) {
 
     ImGui::PopStyleColor(3);
 
-    ImGui::SameLine();
+    ImGui::SameLine(0, 0);
 
     ImGui::PushStyleColor(ImGuiCol_Button, make_color(150, 0, 0, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, make_color(200, 0, 0, 255));

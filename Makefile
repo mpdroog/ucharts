@@ -148,19 +148,19 @@ test_database: test_database.cpp database.cpp
 	$(CXX) $(TEST_CXXFLAGS) -o $@ test_database.cpp database.cpp $(TEST_LDFLAGS)
 
 test_market_data: test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
 test_order_manager: test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
 test_integration: test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
 test_async_io: test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
-	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
 test_threading: test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp
-	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
 
 # ThreadSanitizer targets - build with TSan to detect race conditions
 tsan: tsan_threading

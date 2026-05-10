@@ -678,13 +678,17 @@ int main(int argc, char** argv) {
 
         ImGui::Separator();
 
-        // Calculate layout dimensions
-        float content_height = window_height - ImGui::GetCursorPosY() - 10.0f;
+        // Push zero spacing for content area only
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+
+        // Calculate layout dimensions - account for BeginChild overhead and nested panels
+        const float TOTAL_OVERHEAD = 12.0f;  // Accumulated overhead from nested BeginChild panels
+        float content_height = window_height - ImGui::GetCursorPosY() - TOTAL_OVERHEAD;
 
         // Layout proportions: 15% / 55% / 30%
         float left_width = window_width * 0.15f;
         float center_width = window_width * 0.55f;
-        float right_width = window_width * 0.30f - 10.0f;
+        float right_width = window_width * 0.30f;
 
         // Handle fullscreen chart
         if (g_fullscreen_chart && g_fullscreen_chart_idx >= 0) {
@@ -697,7 +701,7 @@ int main(int argc, char** argv) {
             }
 
             if (fullscreen_widget != nullptr) {
-                if (fullscreen_widget->render(ImVec2(window_width - 20.0f, content_height))) {
+                if (fullscreen_widget->render(ImVec2(window_width, content_height))) {
                     // Double-click to exit fullscreen
                     g_fullscreen_chart = false;
                     g_fullscreen_chart_idx = -1;
@@ -712,37 +716,37 @@ int main(int argc, char** argv) {
                 float half_height = content_height / 2.0f;
 
                 // Open positions (top half)
-                g_positions_widget.render_open_positions(ImVec2(left_width - 10.0f, half_height - 10.0f));
-
-                ImGui::Spacing();
+                g_positions_widget.render_open_positions(ImVec2(left_width, half_height));
 
                 // Closed positions (bottom half)
-                g_positions_widget.render_closed_positions(ImVec2(left_width - 10.0f, half_height - 10.0f));
+                g_positions_widget.render_closed_positions(ImVec2(left_width, half_height));
             }
             ImGui::EndChild();
 
-            ImGui::SameLine();
+            ImGui::SameLine(0, 0);
 
             // Center panel - Tickers and Daily chart
             ImGui::BeginChild("CenterPanel", ImVec2(center_width, content_height), false);
             {
-                float ticker_height = content_height * 0.60f;
-                float daily_height = content_height * 0.40f - 10.0f;
+                // Account for TickerGrid BeginChild overhead
+                const float GRID_OVERHEAD = 6.0f;
+                float ticker_height = (content_height * 0.60f) - GRID_OVERHEAD;
+                float daily_height = content_height * 0.40f;
 
                 // Ticker grid (2x2)
-                float ticker_width = (center_width - 20.0f) / 2.0f;
-                float ticker_h = (ticker_height - 10.0f) / 2.0f;
+                float ticker_width = center_width / 2.0f;
+                float ticker_h = ticker_height / 2.0f;
 
-                ImGui::BeginChild("TickerGrid", ImVec2(center_width - 10.0f, ticker_height), false);
+                ImGui::BeginChild("TickerGrid", ImVec2(center_width, ticker_height), false);
                 {
                     for (int row = 0; row < 2; ++row) {
                         for (int col = 0; col < 2; ++col) {
                             int idx = row * 2 + col;
 
-                            if (col > 0) ImGui::SameLine();
+                            if (col > 0) ImGui::SameLine(0, 0);
 
                             ImGui::PushID(idx);
-                            if (g_ticker_widgets[idx].render(ImVec2(ticker_width - 5.0f, ticker_h - 5.0f))) {
+                            if (g_ticker_widgets[idx].render(ImVec2(ticker_width, ticker_h))) {
                                 // Clicked - select this ticker
                                 for (int i = 0; i < NUM_TICKERS; ++i) {
                                     g_ticker_widgets[i].set_selected(i == idx);
@@ -751,15 +755,12 @@ int main(int argc, char** argv) {
                             }
                             ImGui::PopID();
                         }
-                        if (row == 0) ImGui::Spacing();
                     }
                 }
                 ImGui::EndChild();
 
-                ImGui::Spacing();
-
                 // Daily chart
-                if (g_chart_daily.render(ImVec2(center_width - 10.0f, daily_height))) {
+                if (g_chart_daily.render(ImVec2(center_width, daily_height))) {
                     // Double-click - go fullscreen
                     g_fullscreen_chart = true;
                     g_fullscreen_chart_idx = 2;
@@ -767,29 +768,29 @@ int main(int argc, char** argv) {
             }
             ImGui::EndChild();
 
-            ImGui::SameLine();
+            ImGui::SameLine(0, 0);
 
             // Right panel - 1min and 5min charts
             ImGui::BeginChild("RightPanel", ImVec2(right_width, content_height), false);
             {
-                float chart_height = (content_height - 10.0f) / 2.0f;
+                float chart_height = content_height / 2.0f;
 
                 // 1-min chart
-                if (g_chart_1m.render(ImVec2(right_width - 10.0f, chart_height - 5.0f))) {
+                if (g_chart_1m.render(ImVec2(right_width, chart_height))) {
                     g_fullscreen_chart = true;
                     g_fullscreen_chart_idx = 0;
                 }
 
-                ImGui::Spacing();
-
                 // 5-min chart
-                if (g_chart_5m.render(ImVec2(right_width - 10.0f, chart_height - 5.0f))) {
+                if (g_chart_5m.render(ImVec2(right_width, chart_height))) {
                     g_fullscreen_chart = true;
                     g_fullscreen_chart_idx = 1;
                 }
             }
             ImGui::EndChild();
         }
+
+        ImGui::PopStyleVar();  // Pop ItemSpacing
 
         ImGui::End();
 
