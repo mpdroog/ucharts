@@ -381,6 +381,7 @@ int main(int argc, char** argv) {
     if (window == nullptr) {
         return 1;
     }
+    glfwMaximizeWindow(window);  // Maximize to use full screen
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 

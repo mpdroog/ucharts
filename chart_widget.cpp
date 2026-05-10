@@ -630,7 +630,9 @@ bool ChartWidget::render(ImVec2 size) {
 
     // Calculate volume panel height
     float volume_height = 0.0f;
-    bool show_volume = m_settings && m_settings->volume_enabled && !m_candles.empty() && m_candles[0].volume > 0;
+    // Only show volume bars on daily charts (not on 1min or 5min)
+    bool show_volume = m_settings && m_settings->volume_enabled && !m_candles.empty() && m_candles[0].volume > 0
+                       && m_timeframe == Timeframe::DAILY;
     if (show_volume) {
         volume_height = canvas_size.y * 0.12f;
     }
