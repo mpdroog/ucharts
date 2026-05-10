@@ -153,6 +153,13 @@ public:
     // Message handling (public for callback access)
     void handle_message(const std::string& message) EXCLUDES(m_mutex);
 
+    // Message queue access (public for callback access)
+    void queue_message(const std::string& message) EXCLUDES(m_mutex);
+    bool has_queued_messages() const EXCLUDES(m_mutex);
+    std::string dequeue_message() EXCLUDES(m_mutex);
+    void send_auth_message();
+    void send_subscribe_message();
+
 private:
     char m_api_key_id[128];
     char m_api_secret_key[128];
@@ -169,7 +176,17 @@ private:
 
     // libwebsockets context
     struct lws_context* m_lws_context;
-    [[maybe_unused]] struct lws* m_lws_connection;
+    struct lws* m_lws_connection;
+
+    // Message queue for outgoing messages (guarded by mutex)
+    std::vector<std::string> m_outgoing_queue GUARDED_BY(m_mutex);
+
+    // Reconnection state
+    std::atomic<int> m_reconnect_attempts;
+    std::atomic<bool> m_should_reconnect;
+    static constexpr int MAX_RECONNECT_ATTEMPTS = 10;
+    static constexpr int INITIAL_RECONNECT_DELAY_MS = 1000;
+    static constexpr int MAX_RECONNECT_DELAY_MS = 60000;
 
     // Callbacks (guarded by mutex)
     TZPnLSnapshotCallback m_pnl_snapshot_callback GUARDED_BY(m_mutex);
@@ -182,7 +199,7 @@ private:
     // Background thread
     void worker_thread() NO_THREAD_SAFETY_ANALYSIS;
 
-    // Message parsing
+    // Message parsing (now using nlohmann/json)
     void parse_pnl_snapshot(const std::string& json) EXCLUDES(m_mutex);
     void parse_agg_update(const std::string& json) EXCLUDES(m_mutex);
     void parse_position_pnl(const std::string& json) EXCLUDES(m_mutex);
@@ -190,10 +207,9 @@ private:
     void parse_position_update(const std::string& json) EXCLUDES(m_mutex);
     void parse_system_message(const std::string& json);
 
-    // Connection helpers
-    bool send_auth_message();
-    bool send_subscribe_message();
+    // Connection helpers (private)
     bool reconnect();
+    int get_reconnect_delay_ms() const;
 };
 
 // ============================================================================

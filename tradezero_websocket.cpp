@@ -12,8 +12,11 @@
 #pragma clang diagnostic pop
 #endif
 
+#include <nlohmann/json.hpp>
 #include <cstring>
 #include <cstdio>
+
+using json = nlohmann::json;
 
 // Global instances
 static TradeZeroWebSocket g_tradezero_pnl;
@@ -79,40 +82,99 @@ TZPositionUpdate::TZPositionUpdate()
 struct ConnectionData {
     TradeZeroWebSocket* client;
     std::string message_buffer;
+    std::vector<uint8_t> write_buffer;  // Buffer for outgoing message with LWS_PRE padding
 };
 
 // libwebsockets callback
-[[maybe_unused]] static int websocket_callback([[maybe_unused]] struct lws* wsi, enum lws_callback_reasons reason,
+[[maybe_unused]] static int websocket_callback(struct lws* wsi, enum lws_callback_reasons reason,
                               void* user, void* in, size_t len) {
     ConnectionData* conn_data = static_cast<ConnectionData*>(user);
 
     if (reason == LWS_CALLBACK_CLIENT_ESTABLISHED) {
         if (conn_data && conn_data->client) {
             LOG_I("tradezero_ws", "WebSocket connection established");
+            // Send authentication message
+            conn_data->client->send_auth_message();
         }
-    } else if (reason == LWS_CALLBACK_CLIENT_RECEIVE) {
+        return 0;
+    }
+
+    else if (reason == LWS_CALLBACK_CLIENT_RECEIVE) {
         if (conn_data && conn_data->client && in && len > 0) {
             std::string message(static_cast<const char*>(in), len);
             conn_data->client->handle_message(message);
         }
-    } else if (reason == LWS_CALLBACK_CLIENT_CONNECTION_ERROR) {
+        return 0;
+    }
+
+    else if (reason == LWS_CALLBACK_CLIENT_WRITEABLE) {
+        if (!conn_data || !conn_data->client) {
+            return 0;
+        }
+
+        // Check if there are messages to send
+        if (!conn_data->client->has_queued_messages()) {
+            return 0;
+        }
+
+        // Get next message from queue
+        std::string msg = conn_data->client->dequeue_message();
+        if (msg.empty()) {
+            return 0;
+        }
+
+        // Allocate buffer with LWS_PRE bytes padding before the message
+        size_t msg_len = msg.size();
+        conn_data->write_buffer.resize(LWS_PRE + msg_len);
+
+        // Copy message after LWS_PRE padding
+        std::memcpy(&conn_data->write_buffer[LWS_PRE], msg.c_str(), msg_len);
+
+        // Write message (binary mode for JSON)
+        int written = lws_write(wsi, &conn_data->write_buffer[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+
+        if (written < 0) {
+            LOG_E("tradezero_ws", "Error writing to WebSocket");
+            return -1;
+        }
+
+        if (static_cast<size_t>(written) < msg_len) {
+            LOG_W("tradezero_ws", "Partial write: %d/%zu bytes", written, msg_len);
+        } else {
+            LOG_D("tradezero_ws", "Sent: %s", msg.c_str());
+        }
+
+        // Request another callback if more messages are queued
+        if (conn_data->client->has_queued_messages()) {
+            lws_callback_on_writable(wsi);
+        }
+
+        return 0;
+    }
+
+    else if (reason == LWS_CALLBACK_CLIENT_CONNECTION_ERROR) {
         if (conn_data && conn_data->client) {
             const char* error_msg = in ? static_cast<const char*>(in) : "unknown error";
             LOG_E("tradezero_ws", "Connection error: %s", error_msg);
         }
-    } else if (reason == LWS_CALLBACK_CLIENT_CLOSED) {
-        if (conn_data && conn_data->client) {
-            LOG_W("tradezero_ws", "WebSocket connection closed");
-        }
+        return -1;
     }
-    // Ignore all other callbacks
 
+    else if (reason == LWS_CALLBACK_CLIENT_CLOSED) {
+        if (conn_data && conn_data->client) {
+            LOG_W("tradezero_ws", "WebSocket connection closed - will attempt reconnect");
+        }
+        return 0;
+    }
+
+    // Ignore all other callbacks
     return 0;
 }
 
 TradeZeroWebSocket::TradeZeroWebSocket()
     : m_stream(TZStream::PNL), m_running(false), m_connected(false),
-      m_authenticated(false), m_lws_context(nullptr), m_lws_connection(nullptr) {
+      m_authenticated(false), m_lws_context(nullptr), m_lws_connection(nullptr),
+      m_reconnect_attempts(0), m_should_reconnect(true) {
     m_api_key_id[0] = '\0';
     m_api_secret_key[0] = '\0';
     m_account_id[0] = '\0';
@@ -289,245 +351,391 @@ void TradeZeroWebSocket::worker_thread() {
 }
 
 void TradeZeroWebSocket::handle_message(const std::string& message) {
-    // Check if it's a system message
-    if (message.find("\"@system\":true") != std::string::npos) {
-        parse_system_message(message);
-        return;
-    }
+    // Parse JSON once to determine message type (more robust than string matching)
+    try {
+        auto j = json::parse(message);
 
-    // Check message type based on stream
-    if (m_stream == TZStream::PNL) {
-        if (message.find("\"action\":\"init\"") != std::string::npos) {
+        // Check if it's a system message
+        if (j.contains("@system") && j["@system"].get<bool>()) {
+            parse_system_message(message);
+            return;
+        }
+
+        // Check for P&L stream messages
+        if (j.contains("action") && j["action"].get<std::string>() == "init") {
             parse_pnl_snapshot(message);
-        } else if (message.find("\"target\":\"aggCalcs\"") != std::string::npos) {
-            parse_agg_update(message);
-        } else if (message.find("\"target\":\"position\"") != std::string::npos) {
-            parse_position_pnl(message);
         }
-    } else if (m_stream == TZStream::PORTFOLIO) {
-        if (message.find("\"subscription\":\"Order\"") != std::string::npos) {
-            parse_order_update(message);
-        } else if (message.find("\"subscription\":\"Position\"") != std::string::npos) {
-            parse_position_update(message);
+        else if (j.contains("target")) {
+            std::string target = j["target"].get<std::string>();
+            if (target == "aggCalcs") {
+                parse_agg_update(message);
+            }
+            else if (target == "position") {
+                parse_position_pnl(message);
+            }
         }
+        // Check for Portfolio stream messages
+        else if (j.contains("subscription")) {
+            std::string subscription = j["subscription"].get<std::string>();
+            if (subscription == "Order") {
+                parse_order_update(message);
+            }
+            else if (subscription == "Position") {
+                parse_position_update(message);
+            }
+        }
+    } catch (const json::exception& e) {
+        LOG_E("tradezero_ws", "Failed to route message: %s", e.what());
     }
 }
 
-void TradeZeroWebSocket::parse_system_message(const std::string& json) {
-    // Check for PENDING_AUTH
-    if (json.find("\"status\":\"PENDING_AUTH\"") != std::string::npos) {
-        LOG_I("tradezero_ws", "Auth required, sending credentials...");
-        send_auth_message();
-    }
-    // Check for CONNECTED
-    else if (json.find("\"status\":\"CONNECTED\"") != std::string::npos) {
-        LOG_I("tradezero_ws", "Authenticated successfully");
-        m_authenticated.store(true);
-        send_subscribe_message();
+void TradeZeroWebSocket::parse_system_message(const std::string& json_str) {
+    try {
+        auto j = json::parse(json_str);
 
-        // Notify connection callback
-        TZConnectionCallback cb;
+        if (!j.contains("status")) {
+            return;
+        }
+
+        std::string status = j["status"];
+
+        if (status == "PENDING_AUTH") {
+            LOG_I("tradezero_ws", "Server waiting for authentication");
+            // Auth message already sent in ESTABLISHED callback
+        }
+        else if (status == "CONNECTED") {
+            LOG_I("tradezero_ws", "Authenticated successfully");
+            m_authenticated.store(true);
+            m_reconnect_attempts.store(0);  // Reset reconnect counter on success
+            send_subscribe_message();
+
+            // Notify connection callback
+            TZConnectionCallback cb;
+            {
+                MutexLock lock(m_mutex);
+                cb = m_connection_callback;
+            }
+            if (cb) {
+                cb(true);
+            }
+        }
+        else if (status == "FAILED_AUTH") {
+            LOG_E("tradezero_ws", "Authentication failed - check credentials");
+            m_running.store(false);
+            m_should_reconnect.store(false);  // Don't retry on auth failure
+        }
+        else {
+            LOG_W("tradezero_ws", "Unknown system status: %s", status.c_str());
+        }
+    } catch (const json::exception& e) {
+        LOG_E("tradezero_ws", "Failed to parse system message: %s", e.what());
+    }
+}
+
+void TradeZeroWebSocket::send_auth_message() {
+    json auth_msg = {
+        {"key", m_api_key_id},
+        {"secret", m_api_secret_key}
+    };
+
+    std::string msg = auth_msg.dump();
+    LOG_I("tradezero_ws", "Queueing auth message");
+    queue_message(msg);
+}
+
+void TradeZeroWebSocket::send_subscribe_message() {
+    json sub_msg;
+
+    if (m_stream == TZStream::PNL) {
+        sub_msg = {{"account", m_account_id}};
+    } else {
+        sub_msg = {
+            {"accountId", m_account_id},
+            {"subscriptions", {"Order", "Position"}}
+        };
+    }
+
+    std::string msg = sub_msg.dump();
+    LOG_I("tradezero_ws", "Queueing subscribe message");
+    queue_message(msg);
+    m_connected.store(true);
+}
+
+void TradeZeroWebSocket::parse_pnl_snapshot(const std::string& json_str) {
+    try {
+        auto j = json::parse(json_str);
+
+        TZPnLSnapshot snapshot;
+
+        // Parse account-level fields
+        if (j.contains("accountValue")) snapshot.account_value = j["accountValue"].get<float>();
+        if (j.contains("availableCash")) snapshot.available_cash = j["availableCash"].get<float>();
+        if (j.contains("dayUnrealized")) snapshot.day_unrealized = j["dayUnrealized"].get<float>();
+        if (j.contains("dayRealized")) snapshot.day_realized = j["dayRealized"].get<float>();
+        if (j.contains("dayPnl")) snapshot.day_pnl = j["dayPnl"].get<float>();
+        if (j.contains("totalUnrealized")) snapshot.total_unrealized = j["totalUnrealized"].get<float>();
+
+        // Calculate buying power from allowedLeverage if available
+        if (j.contains("allowedLeverage")) {
+            float leverage = j["allowedLeverage"].get<float>();
+            snapshot.buying_power = snapshot.account_value * leverage;
+        } else {
+            snapshot.buying_power = snapshot.account_value * 4.0f;  // Default 4x leverage
+        }
+
+        // Parse positions array if present
+        if (j.contains("positions") && j["positions"].is_array()) {
+            for (const auto& pos_json : j["positions"]) {
+                TZPositionPnL pos;
+
+                if (pos_json.contains("positionId")) safe_strcpy(pos.position_id, pos_json["positionId"].get<std::string>().c_str(), sizeof(pos.position_id));
+                if (pos_json.contains("symbol")) safe_strcpy(pos.symbol, pos_json["symbol"].get<std::string>().c_str(), sizeof(pos.symbol));
+
+                // Parse pnlCalc nested object
+                if (pos_json.contains("pnlCalc") && pos_json["pnlCalc"].is_object()) {
+                    const auto& pnl_calc = pos_json["pnlCalc"];
+                    if (pnl_calc.contains("unrealizedPnL")) pos.unrealized_pnl = pnl_calc["unrealizedPnL"].get<float>();
+                    if (pnl_calc.contains("dayUnrealizedPnL")) pos.day_unrealized_pnl = pnl_calc["dayUnrealizedPnL"].get<float>();
+                    if (pnl_calc.contains("pctPnLMove")) pos.pct_pnl_move = pnl_calc["pctPnLMove"].get<float>();
+                    if (pnl_calc.contains("dayPctPnLMove")) pos.day_pct_pnl_move = pnl_calc["dayPctPnLMove"].get<float>();
+                    if (pnl_calc.contains("exposure")) pos.exposure = pnl_calc["exposure"].get<float>();
+                }
+
+                if (pos_json.contains("realizedPnl")) pos.realized_pnl = pos_json["realizedPnl"].get<float>();
+                if (pos_json.contains("dayRealizedPnl")) pos.day_realized_pnl = pos_json["dayRealizedPnl"].get<float>();
+
+                snapshot.positions.push_back(pos);
+            }
+        }
+
+        LOG_I("tradezero_ws", "P&L Snapshot: equity=%.2f, cash=%.2f, pnl=%.2f, positions=%zu",
+              static_cast<double>(snapshot.account_value), static_cast<double>(snapshot.available_cash),
+              static_cast<double>(snapshot.day_pnl), snapshot.positions.size());
+
+        // Invoke callback
+        TZPnLSnapshotCallback cb;
         {
             MutexLock lock(m_mutex);
-            cb = m_connection_callback;
+            cb = m_pnl_snapshot_callback;
         }
         if (cb) {
-            cb(true);
+            cb(snapshot);
         }
-    }
-    // Check for FAILED_AUTH
-    else if (json.find("\"status\":\"FAILED_AUTH\"") != std::string::npos) {
-        LOG_E("tradezero_ws", "Authentication failed");
-        m_running.store(false);
+    } catch (const json::exception& e) {
+        LOG_E("tradezero_ws", "Failed to parse P&L snapshot: %s", e.what());
     }
 }
 
-bool TradeZeroWebSocket::send_auth_message() {
-    char auth_msg[512];
-    std::snprintf(auth_msg, sizeof(auth_msg),
-        "{\"key\":\"%s\",\"secret\":\"%s\"}",
-        m_api_key_id, m_api_secret_key);
+void TradeZeroWebSocket::parse_agg_update(const std::string& json_str) {
+    try {
+        auto j = json::parse(json_str);
 
-    // TODO: Use lws_write() to send message
-    // This requires proper callback setup
-    LOG_D("tradezero_ws", "Auth message: %s", auth_msg);
+        TZAggUpdate update;
 
-    return true;
-}
+        // Parse aggregate update fields
+        if (j.contains("accountValue")) update.account_value = j["accountValue"].get<float>();
+        if (j.contains("exposure")) update.exposure = j["exposure"].get<float>();
+        if (j.contains("dayUnrealized")) update.day_unrealized = j["dayUnrealized"].get<float>();
+        if (j.contains("dayPnl")) update.day_pnl = j["dayPnl"].get<float>();
+        if (j.contains("totalUnrealized")) update.total_unrealized = j["totalUnrealized"].get<float>();
+        if (j.contains("equityRatio")) update.equity_ratio = j["equityRatio"].get<float>();
 
-bool TradeZeroWebSocket::send_subscribe_message() {
-    char sub_msg[256];
-
-    if (m_stream == TZStream::PNL) {
-        std::snprintf(sub_msg, sizeof(sub_msg),
-            "{\"account\":\"%s\"}", m_account_id);
-    } else {
-        std::snprintf(sub_msg, sizeof(sub_msg),
-            "{\"accountId\":\"%s\",\"subscriptions\":[\"Order\",\"Position\"]}",
-            m_account_id);
-    }
-
-    // TODO: Use lws_write() to send message
-    LOG_D("tradezero_ws", "Subscribe message: %s", sub_msg);
-
-    m_connected.store(true);
-    return true;
-}
-
-// Simplified JSON parsing (similar to tradezero_client.cpp)
-void TradeZeroWebSocket::parse_pnl_snapshot(const std::string& json) {
-    TZPnLSnapshot snapshot;
-
-    // Extract account values (simplified parsing)
-    size_t pos;
-    if ((pos = json.find("\"accountValue\":")) != std::string::npos) {
-        snapshot.account_value = static_cast<float>(std::atof(json.c_str() + pos + 15));
-    }
-    if ((pos = json.find("\"availableCash\":")) != std::string::npos) {
-        snapshot.available_cash = static_cast<float>(std::atof(json.c_str() + pos + 16));
-    }
-    if ((pos = json.find("\"dayPnl\":")) != std::string::npos) {
-        snapshot.day_pnl = static_cast<float>(std::atof(json.c_str() + pos + 9));
-    }
-
-    // Calculate buying power (simplified)
-    snapshot.buying_power = snapshot.account_value * 4.0f;  // Assume 4x leverage
-
-    LOG_I("tradezero_ws", "P&L Snapshot: equity=%.2f, cash=%.2f, pnl=%.2f",
-          static_cast<double>(snapshot.account_value), static_cast<double>(snapshot.available_cash), static_cast<double>(snapshot.day_pnl));
-
-    // Invoke callback
-    TZPnLSnapshotCallback cb;
-    {
-        MutexLock lock(m_mutex);
-        cb = m_pnl_snapshot_callback;
-    }
-    if (cb) {
-        cb(snapshot);
-    }
-}
-
-void TradeZeroWebSocket::parse_agg_update(const std::string& json) {
-    TZAggUpdate update;
-
-    size_t pos;
-    if ((pos = json.find("\"accountValue\":")) != std::string::npos) {
-        update.account_value = static_cast<float>(std::atof(json.c_str() + pos + 15));
-    }
-    if ((pos = json.find("\"dayPnl\":")) != std::string::npos) {
-        update.day_pnl = static_cast<float>(std::atof(json.c_str() + pos + 9));
-    }
-
-    // Invoke callback
-    TZAggUpdateCallback cb;
-    {
-        MutexLock lock(m_mutex);
-        cb = m_agg_update_callback;
-    }
-    if (cb) {
-        cb(update);
-    }
-}
-
-void TradeZeroWebSocket::parse_position_pnl(const std::string& json) {
-    // Simplified implementation
-    TZPositionPnL pos_pnl;
-
-    // Extract symbol
-    size_t pos = json.find("\"symbol\":");
-    if (pos != std::string::npos) {
-        size_t q1 = json.find('"', pos + 9);
-        size_t q2 = json.find('"', q1 + 1);
-        if (q1 != std::string::npos && q2 != std::string::npos) {
-            std::string symbol = json.substr(q1 + 1, q2 - q1 - 1);
-            std::strncpy(pos_pnl.symbol, symbol.c_str(), sizeof(pos_pnl.symbol) - 1);
+        // Invoke callback
+        TZAggUpdateCallback cb;
+        {
+            MutexLock lock(m_mutex);
+            cb = m_agg_update_callback;
         }
-    }
-
-    // Invoke callback
-    TZPositionPnLCallback cb;
-    {
-        MutexLock lock(m_mutex);
-        cb = m_position_pnl_callback;
-    }
-    if (cb && pos_pnl.symbol[0] != '\0') {
-        cb(pos_pnl);
+        if (cb) {
+            cb(update);
+        }
+    } catch (const json::exception& e) {
+        LOG_E("tradezero_ws", "Failed to parse aggregate update: %s", e.what());
     }
 }
 
-void TradeZeroWebSocket::parse_order_update(const std::string& json) {
-    TZOrderUpdate order;
+void TradeZeroWebSocket::parse_position_pnl(const std::string& json_str) {
+    try {
+        auto j = json::parse(json_str);
 
-    // Extract order fields (simplified)
-    size_t pos;
-    if ((pos = json.find("\"symbol\":")) != std::string::npos) {
-        size_t q1 = json.find('"', pos + 9);
-        size_t q2 = json.find('"', q1 + 1);
-        if (q1 != std::string::npos && q2 != std::string::npos) {
-            std::string symbol = json.substr(q1 + 1, q2 - q1 - 1);
-            std::strncpy(order.symbol, symbol.c_str(), sizeof(order.symbol) - 1);
+        TZPositionPnL pos_pnl;
+
+        // Parse position P&L fields
+        if (j.contains("positionId")) safe_strcpy(pos_pnl.position_id, j["positionId"].get<std::string>().c_str(), sizeof(pos_pnl.position_id));
+        if (j.contains("symbol")) safe_strcpy(pos_pnl.symbol, j["symbol"].get<std::string>().c_str(), sizeof(pos_pnl.symbol));
+
+        // Parse pnlCalc nested object
+        if (j.contains("pnlCalc") && j["pnlCalc"].is_object()) {
+            const auto& pnl_calc = j["pnlCalc"];
+            if (pnl_calc.contains("unrealizedPnL")) pos_pnl.unrealized_pnl = pnl_calc["unrealizedPnL"].get<float>();
+            if (pnl_calc.contains("dayUnrealizedPnL")) pos_pnl.day_unrealized_pnl = pnl_calc["dayUnrealizedPnL"].get<float>();
+            if (pnl_calc.contains("pctPnLMove")) pos_pnl.pct_pnl_move = pnl_calc["pctPnLMove"].get<float>();
+            if (pnl_calc.contains("dayPctPnLMove")) pos_pnl.day_pct_pnl_move = pnl_calc["dayPctPnLMove"].get<float>();
+            if (pnl_calc.contains("exposure")) pos_pnl.exposure = pnl_calc["exposure"].get<float>();
         }
-    }
 
-    if ((pos = json.find("\"orderStatus\":")) != std::string::npos) {
-        size_t q1 = json.find('"', pos + 14);
-        size_t q2 = json.find('"', q1 + 1);
-        if (q1 != std::string::npos && q2 != std::string::npos) {
-            std::string status = json.substr(q1 + 1, q2 - q1 - 1);
-            std::strncpy(order.order_status, status.c_str(), sizeof(order.order_status) - 1);
+        if (j.contains("realizedPnl")) pos_pnl.realized_pnl = j["realizedPnl"].get<float>();
+        if (j.contains("dayRealizedPnl")) pos_pnl.day_realized_pnl = j["dayRealizedPnl"].get<float>();
+
+        LOG_I("tradezero_ws", "Position P&L: %s unrealized=%.2f day_pnl=%.2f",
+              pos_pnl.symbol, static_cast<double>(pos_pnl.unrealized_pnl), static_cast<double>(pos_pnl.day_unrealized_pnl));
+
+        // Invoke callback
+        TZPositionPnLCallback cb;
+        {
+            MutexLock lock(m_mutex);
+            cb = m_position_pnl_callback;
         }
-    }
-
-    LOG_I("tradezero_ws", "Order update: %s status=%s", order.symbol, order.order_status);
-
-    // Invoke callback
-    TZOrderCallback cb;
-    {
-        MutexLock lock(m_mutex);
-        cb = m_order_callback;
-    }
-    if (cb && order.symbol[0] != '\0') {
-        cb(order);
+        if (cb && pos_pnl.symbol[0] != '\0') {
+            cb(pos_pnl);
+        }
+    } catch (const json::exception& e) {
+        LOG_E("tradezero_ws", "Failed to parse position P&L: %s", e.what());
     }
 }
 
-void TradeZeroWebSocket::parse_position_update(const std::string& json) {
-    TZPositionUpdate position;
+void TradeZeroWebSocket::parse_order_update(const std::string& json_str) {
+    try {
+        auto j = json::parse(json_str);
 
-    // Extract position fields (simplified)
-    size_t pos;
-    if ((pos = json.find("\"symbol\":")) != std::string::npos) {
-        size_t q1 = json.find('"', pos + 9);
-        size_t q2 = json.find('"', q1 + 1);
-        if (q1 != std::string::npos && q2 != std::string::npos) {
-            std::string symbol = json.substr(q1 + 1, q2 - q1 - 1);
-            std::strncpy(position.symbol, symbol.c_str(), sizeof(position.symbol) - 1);
+        TZOrderUpdate order;
+
+        // Parse all order fields
+        if (j.contains("accountId")) safe_strcpy(order.account_id, j["accountId"].get<std::string>().c_str(), sizeof(order.account_id));
+        if (j.contains("clientOrderId")) safe_strcpy(order.client_order_id, j["clientOrderId"].get<std::string>().c_str(), sizeof(order.client_order_id));
+        if (j.contains("symbol")) safe_strcpy(order.symbol, j["symbol"].get<std::string>().c_str(), sizeof(order.symbol));
+        if (j.contains("side")) safe_strcpy(order.side, j["side"].get<std::string>().c_str(), sizeof(order.side));
+        if (j.contains("orderStatus")) safe_strcpy(order.order_status, j["orderStatus"].get<std::string>().c_str(), sizeof(order.order_status));
+        if (j.contains("orderType")) safe_strcpy(order.order_type, j["orderType"].get<std::string>().c_str(), sizeof(order.order_type));
+        if (j.contains("orderQuantity")) order.order_quantity = j["orderQuantity"];
+        if (j.contains("executed")) order.executed = j["executed"];
+        if (j.contains("leavesQuantity")) order.leaves_quantity = j["leavesQuantity"];
+        if (j.contains("limitPrice")) order.limit_price = j["limitPrice"];
+        if (j.contains("priceAvg")) order.price_avg = j["priceAvg"];
+        if (j.contains("lastPrice")) order.last_price = j["lastPrice"];
+        if (j.contains("lastQuantity")) order.last_quantity = j["lastQuantity"];
+        if (j.contains("startTime")) safe_strcpy(order.start_time, j["startTime"].get<std::string>().c_str(), sizeof(order.start_time));
+        if (j.contains("lastUpdated")) safe_strcpy(order.last_updated, j["lastUpdated"].get<std::string>().c_str(), sizeof(order.last_updated));
+
+        LOG_I("tradezero_ws", "Order update: %s %s qty=%d status=%s",
+              order.symbol, order.side, order.order_quantity, order.order_status);
+
+        // Invoke callback
+        TZOrderCallback cb;
+        {
+            MutexLock lock(m_mutex);
+            cb = m_order_callback;
         }
+        if (cb && order.symbol[0] != '\0') {
+            cb(order);
+        }
+    } catch (const json::exception& e) {
+        LOG_E("tradezero_ws", "Failed to parse order update: %s", e.what());
+    }
+}
+
+void TradeZeroWebSocket::parse_position_update(const std::string& json_str) {
+    try {
+        auto j = json::parse(json_str);
+
+        TZPositionUpdate position;
+
+        // Parse position fields
+        if (j.contains("id")) safe_strcpy(position.id, j["id"].get<std::string>().c_str(), sizeof(position.id));
+        if (j.contains("accountId")) safe_strcpy(position.account_id, j["accountId"].get<std::string>().c_str(), sizeof(position.account_id));
+        if (j.contains("symbol")) safe_strcpy(position.symbol, j["symbol"].get<std::string>().c_str(), sizeof(position.symbol));
+        if (j.contains("shares")) position.shares = j["shares"].get<float>();
+        if (j.contains("side")) safe_strcpy(position.side, j["side"].get<std::string>().c_str(), sizeof(position.side));
+        if (j.contains("priceAvg")) position.price_avg = j["priceAvg"].get<float>();
+        if (j.contains("priceOpen")) position.price_open = j["priceOpen"].get<float>();
+        if (j.contains("priceClose")) position.price_close = j["priceClose"].get<float>();
+        if (j.contains("dayOvernight")) safe_strcpy(position.day_overnight, j["dayOvernight"].get<std::string>().c_str(), sizeof(position.day_overnight));
+        if (j.contains("createdDate")) safe_strcpy(position.created_date, j["createdDate"].get<std::string>().c_str(), sizeof(position.created_date));
+        if (j.contains("updatedDate")) safe_strcpy(position.updated_date, j["updatedDate"].get<std::string>().c_str(), sizeof(position.updated_date));
+
+        LOG_I("tradezero_ws", "Position update: %s shares=%.0f avg_price=%.2f",
+              position.symbol, static_cast<double>(position.shares), static_cast<double>(position.price_avg));
+
+        // Invoke callback
+        TZPositionCallback cb;
+        {
+            MutexLock lock(m_mutex);
+            cb = m_position_callback;
+        }
+        if (cb && position.symbol[0] != '\0') {
+            cb(position);
+        }
+    } catch (const json::exception& e) {
+        LOG_E("tradezero_ws", "Failed to parse position update: %s", e.what());
+    }
+}
+
+// ============================================================================
+// Message Queue Methods
+// ============================================================================
+
+void TradeZeroWebSocket::queue_message(const std::string& message) {
+    MutexLock lock(m_mutex);
+    m_outgoing_queue.push_back(message);
+
+    // Request callback to send message
+    if (m_lws_connection) {
+        lws_callback_on_writable(m_lws_connection);
+    }
+}
+
+bool TradeZeroWebSocket::has_queued_messages() const {
+    MutexLock lock(m_mutex);
+    return !m_outgoing_queue.empty();
+}
+
+std::string TradeZeroWebSocket::dequeue_message() {
+    MutexLock lock(m_mutex);
+    if (m_outgoing_queue.empty()) {
+        return "";
     }
 
-    if ((pos = json.find("\"shares\":")) != std::string::npos) {
-        position.shares = static_cast<float>(std::atof(json.c_str() + pos + 9));
-    }
+    std::string msg = m_outgoing_queue.front();
+    m_outgoing_queue.erase(m_outgoing_queue.begin());
+    return msg;
+}
 
-    if ((pos = json.find("\"priceAvg\":")) != std::string::npos) {
-        position.price_avg = static_cast<float>(std::atof(json.c_str() + pos + 11));
-    }
+// ============================================================================
+// Reconnection Logic
+// ============================================================================
 
-    LOG_I("tradezero_ws", "Position update: %s shares=%.0f", position.symbol, static_cast<double>(position.shares));
-
-    // Invoke callback
-    TZPositionCallback cb;
-    {
-        MutexLock lock(m_mutex);
-        cb = m_position_callback;
-    }
-    if (cb && position.symbol[0] != '\0') {
-        cb(position);
-    }
+int TradeZeroWebSocket::get_reconnect_delay_ms() const {
+    int attempts = m_reconnect_attempts.load();
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 60s (capped)
+    int delay = INITIAL_RECONNECT_DELAY_MS * (1 << attempts);
+    return (delay > MAX_RECONNECT_DELAY_MS) ? MAX_RECONNECT_DELAY_MS : delay;
 }
 
 bool TradeZeroWebSocket::reconnect() {
-    LOG_I("tradezero_ws", "Attempting to reconnect...");
-    // TODO: Implement reconnection logic
-    return false;
+    if (!m_should_reconnect.load()) {
+        LOG_I("tradezero_ws", "Reconnection disabled");
+        return false;
+    }
+
+    int attempts = m_reconnect_attempts.load();
+    if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+        LOG_E("tradezero_ws", "Max reconnection attempts reached (%d)", MAX_RECONNECT_ATTEMPTS);
+        m_should_reconnect.store(false);
+        return false;
+    }
+
+    m_reconnect_attempts.fetch_add(1);
+    int delay_ms = get_reconnect_delay_ms();
+
+    LOG_I("tradezero_ws", "Reconnecting in %dms (attempt %d/%d)...",
+          delay_ms, attempts + 1, MAX_RECONNECT_ATTEMPTS);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+
+    // Reset connection state
+    m_connected.store(false);
+    m_authenticated.store(false);
+
+    // Reconnection will be handled by worker thread restarting the connection
+    return true;
 }

@@ -4,6 +4,9 @@
 #include <curl/curl.h>
 #include <cstring>
 #include <cstdio>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 // Global instance
 static TradeZeroClient g_tradezero_client;
@@ -233,217 +236,136 @@ TZResponse TradeZeroClient::cancel_all_orders() {
     return make_request("DELETE", "/accounts/orders", nullptr);
 }
 
-// Simple JSON parser for positions
-bool TradeZeroClient::parse_positions(const std::string& json, std::vector<Position>& positions) {
+bool TradeZeroClient::parse_positions(const std::string& json_str, std::vector<Position>& positions) {
     positions.clear();
 
-    // Expecting JSON array: [{...}, {...}, ...]
-    if (json.empty() || json[0] != '[') {
-        LOG_E("tradezero", "Invalid positions JSON (expected array)");
-        return false;
-    }
+    try {
+        auto j = json::parse(json_str);
 
-    // Simple state machine parser
-    size_t pos = 1;  // Skip opening [
-    while (pos < json.length()) {
-        // Skip whitespace
-        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == '\t')) {
-            pos++;
-        }
-
-        if (pos >= json.length() || json[pos] == ']') break;
-
-        // Expecting object
-        if (json[pos] != '{') {
-            LOG_E("tradezero", "Expected '{' in positions array at pos %zu", pos);
+        // Expecting JSON array
+        if (!j.is_array()) {
+            LOG_E("tradezero", "Invalid positions JSON (expected array)");
             return false;
         }
 
-        // Find end of object
-        size_t start = pos;
-        int brace_count = 0;
-        while (pos < json.length()) {
-            if (json[pos] == '{') brace_count++;
-            else if (json[pos] == '}') {
-                brace_count--;
-                if (brace_count == 0) {
-                    pos++;  // Include closing }
-                    break;
-                }
-            }
-            pos++;
-        }
+        for (const auto& pos_json : j) {
+            Position position;
+            position.symbol[0] = '\0';
+            position.quantity = 0;
+            position.avg_price = 0.0f;
+            position.current_price = 0.0f;
 
-        std::string obj_json = json.substr(start, pos - start);
-
-        // Parse position object (simplified - just extract key fields)
-        Position position;
-        position.symbol[0] = '\0';
-        position.quantity = 0;
-        position.avg_price = 0.0f;
-        position.current_price = 0.0f;
-
-        // Extract symbol
-        size_t symbol_pos = obj_json.find("\"symbol\":");
-        if (symbol_pos != std::string::npos) {
-            size_t quote1 = obj_json.find('"', symbol_pos + 9);
-            size_t quote2 = obj_json.find('"', quote1 + 1);
-            if (quote1 != std::string::npos && quote2 != std::string::npos) {
-                std::string symbol = obj_json.substr(quote1 + 1, quote2 - quote1 - 1);
+            // Extract position fields
+            if (pos_json.contains("symbol") && pos_json["symbol"].is_string()) {
+                std::string symbol = pos_json["symbol"].get<std::string>();
                 std::strncpy(position.symbol, symbol.c_str(), sizeof(position.symbol) - 1);
                 position.symbol[sizeof(position.symbol) - 1] = '\0';
             }
+
+            if (pos_json.contains("shares")) {
+                // shares can be int or float
+                if (pos_json["shares"].is_number_integer()) {
+                    position.quantity = pos_json["shares"].get<int>();
+                } else if (pos_json["shares"].is_number_float()) {
+                    position.quantity = static_cast<int>(pos_json["shares"].get<float>());
+                }
+            }
+
+            if (pos_json.contains("priceAvg")) {
+                position.avg_price = pos_json["priceAvg"].get<float>();
+            }
+
+            if (pos_json.contains("priceClose")) {
+                position.current_price = pos_json["priceClose"].get<float>();
+            }
+
+            if (position.symbol[0] != '\0') {
+                positions.push_back(position);
+            }
         }
 
-        // Extract shares
-        size_t shares_pos = obj_json.find("\"shares\":");
-        if (shares_pos != std::string::npos) {
-            position.quantity = std::atoi(obj_json.c_str() + shares_pos + 9);
-        }
+        LOG_I("tradezero", "Parsed %zu positions", positions.size());
+        return true;
 
-        // Extract priceAvg
-        size_t avg_pos = obj_json.find("\"priceAvg\":");
-        if (avg_pos != std::string::npos) {
-            position.avg_price = static_cast<float>(std::atof(obj_json.c_str() + avg_pos + 11));
-        }
-
-        // Extract priceClose (current price)
-        size_t close_pos = obj_json.find("\"priceClose\":");
-        if (close_pos != std::string::npos) {
-            position.current_price = static_cast<float>(std::atof(obj_json.c_str() + close_pos + 13));
-        }
-
-        if (position.symbol[0] != '\0') {
-            positions.push_back(position);
-        }
-
-        // Skip comma
-        while (pos < json.length() && (json[pos] == ' ' || json[pos] == ',' || json[pos] == '\n' || json[pos] == '\t')) {
-            pos++;
-        }
-    }
-
-    LOG_I("tradezero", "Parsed %zu positions", positions.size());
-    return true;
-}
-
-// Simple JSON parser for orders
-bool TradeZeroClient::parse_orders(const std::string& json, std::vector<Order>& orders) {
-    orders.clear();
-
-    // Expecting JSON array: [{...}, {...}, ...]
-    if (json.empty() || json[0] != '[') {
-        LOG_E("tradezero", "Invalid orders JSON (expected array)");
+    } catch (const json::exception& e) {
+        LOG_E("tradezero", "Failed to parse positions JSON: %s", e.what());
         return false;
     }
+}
 
-    // Simple state machine parser
-    size_t pos = 1;  // Skip opening [
-    while (pos < json.length()) {
-        // Skip whitespace
-        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == '\t')) {
-            pos++;
-        }
+bool TradeZeroClient::parse_orders(const std::string& json_str, std::vector<Order>& orders) {
+    orders.clear();
 
-        if (pos >= json.length() || json[pos] == ']') break;
+    try {
+        auto j = json::parse(json_str);
 
-        // Expecting object
-        if (json[pos] != '{') {
-            LOG_E("tradezero", "Expected '{' in orders array at pos %zu", pos);
+        // Expecting JSON array
+        if (!j.is_array()) {
+            LOG_E("tradezero", "Invalid orders JSON (expected array)");
             return false;
         }
 
-        // Find end of object
-        size_t start = pos;
-        int brace_count = 0;
-        while (pos < json.length()) {
-            if (json[pos] == '{') brace_count++;
-            else if (json[pos] == '}') {
-                brace_count--;
-                if (brace_count == 0) {
-                    pos++;  // Include closing }
-                    break;
-                }
-            }
-            pos++;
-        }
+        for (const auto& order_json : j) {
+            Order order;
+            order.id = 0;
+            order.symbol[0] = '\0';
+            order.quantity = 0;
+            order.price = 0.0f;
+            order.side = OrderSide::BUY;
+            order.status = OrderStatus::PENDING;
+            order.client_order_id[0] = '\0';
+            order.filled = 0;
 
-        std::string obj_json = json.substr(start, pos - start);
-
-        // Parse order object (simplified)
-        Order order;
-        order.id = 0;
-        order.symbol[0] = '\0';
-        order.quantity = 0;
-        order.price = 0.0f;
-        order.side = OrderSide::BUY;
-        order.status = OrderStatus::PENDING;
-        order.client_order_id[0] = '\0';
-
-        // Extract symbol
-        size_t symbol_pos = obj_json.find("\"symbol\":");
-        if (symbol_pos != std::string::npos) {
-            size_t quote1 = obj_json.find('"', symbol_pos + 9);
-            size_t quote2 = obj_json.find('"', quote1 + 1);
-            if (quote1 != std::string::npos && quote2 != std::string::npos) {
-                std::string symbol = obj_json.substr(quote1 + 1, quote2 - quote1 - 1);
+            // Extract symbol
+            if (order_json.contains("symbol") && order_json["symbol"].is_string()) {
+                std::string symbol = order_json["symbol"].get<std::string>();
                 std::strncpy(order.symbol, symbol.c_str(), sizeof(order.symbol) - 1);
                 order.symbol[sizeof(order.symbol) - 1] = '\0';
             }
-        }
 
-        // Extract clientOrderId
-        size_t cid_pos = obj_json.find("\"clientOrderId\":");
-        if (cid_pos != std::string::npos) {
-            size_t quote1 = obj_json.find('"', cid_pos + 16);
-            size_t quote2 = obj_json.find('"', quote1 + 1);
-            if (quote1 != std::string::npos && quote2 != std::string::npos) {
-                std::string cid = obj_json.substr(quote1 + 1, quote2 - quote1 - 1);
+            // Extract clientOrderId
+            if (order_json.contains("clientOrderId") && order_json["clientOrderId"].is_string()) {
+                std::string cid = order_json["clientOrderId"].get<std::string>();
                 std::strncpy(order.client_order_id, cid.c_str(), sizeof(order.client_order_id) - 1);
                 order.client_order_id[sizeof(order.client_order_id) - 1] = '\0';
             }
-        }
 
-        // Extract orderQuantity
-        size_t qty_pos = obj_json.find("\"orderQuantity\":");
-        if (qty_pos != std::string::npos) {
-            order.quantity = std::atoi(obj_json.c_str() + qty_pos + 16);
-        }
+            // Extract orderQuantity
+            if (order_json.contains("orderQuantity")) {
+                if (order_json["orderQuantity"].is_number_integer()) {
+                    order.quantity = order_json["orderQuantity"].get<int>();
+                } else if (order_json["orderQuantity"].is_number_float()) {
+                    order.quantity = static_cast<int>(order_json["orderQuantity"].get<float>());
+                }
+            }
 
-        // Extract limitPrice
-        size_t price_pos = obj_json.find("\"limitPrice\":");
-        if (price_pos != std::string::npos) {
-            order.price = static_cast<float>(std::atof(obj_json.c_str() + price_pos + 13));
-        }
+            // Extract limitPrice
+            if (order_json.contains("limitPrice")) {
+                order.price = order_json["limitPrice"].get<float>();
+            }
 
-        // Extract executed (filled quantity)
-        size_t exec_pos = obj_json.find("\"executed\":");
-        if (exec_pos != std::string::npos) {
-            order.filled = std::atoi(obj_json.c_str() + exec_pos + 11);
-        }
+            // Extract executed (filled quantity)
+            if (order_json.contains("executed")) {
+                if (order_json["executed"].is_number_integer()) {
+                    order.filled = order_json["executed"].get<int>();
+                } else if (order_json["executed"].is_number_float()) {
+                    order.filled = static_cast<int>(order_json["executed"].get<float>());
+                }
+            }
 
-        // Extract side
-        size_t side_pos = obj_json.find("\"side\":");
-        if (side_pos != std::string::npos) {
-            size_t quote1 = obj_json.find('"', side_pos + 7);
-            size_t quote2 = obj_json.find('"', quote1 + 1);
-            if (quote1 != std::string::npos && quote2 != std::string::npos) {
-                std::string side = obj_json.substr(quote1 + 1, quote2 - quote1 - 1);
+            // Extract side
+            if (order_json.contains("side") && order_json["side"].is_string()) {
+                std::string side = order_json["side"].get<std::string>();
                 if (side == "buy" || side == "Buy") {
                     order.side = OrderSide::BUY;
                 } else if (side == "sell" || side == "Sell") {
                     order.side = OrderSide::SELL;
                 }
             }
-        }
 
-        // Extract orderStatus
-        size_t status_pos = obj_json.find("\"orderStatus\":");
-        if (status_pos != std::string::npos) {
-            size_t quote1 = obj_json.find('"', status_pos + 14);
-            size_t quote2 = obj_json.find('"', quote1 + 1);
-            if (quote1 != std::string::npos && quote2 != std::string::npos) {
-                std::string status = obj_json.substr(quote1 + 1, quote2 - quote1 - 1);
+            // Extract orderStatus
+            if (order_json.contains("orderStatus") && order_json["orderStatus"].is_string()) {
+                std::string status = order_json["orderStatus"].get<std::string>();
                 if (status == "new" || status == "Accepted") {
                     order.status = OrderStatus::PENDING;
                 } else if (status == "filled" || status == "Filled") {
@@ -454,20 +376,19 @@ bool TradeZeroClient::parse_orders(const std::string& json, std::vector<Order>& 
                     order.status = OrderStatus::PARTIAL;
                 }
             }
+
+            if (order.symbol[0] != '\0') {
+                orders.push_back(order);
+            }
         }
 
-        if (order.symbol[0] != '\0') {
-            orders.push_back(order);
-        }
+        LOG_I("tradezero", "Parsed %zu orders", orders.size());
+        return true;
 
-        // Skip comma
-        while (pos < json.length() && (json[pos] == ' ' || json[pos] == ',' || json[pos] == '\n' || json[pos] == '\t')) {
-            pos++;
-        }
+    } catch (const json::exception& e) {
+        LOG_E("tradezero", "Failed to parse orders JSON: %s", e.what());
+        return false;
     }
-
-    LOG_I("tradezero", "Parsed %zu orders", orders.size());
-    return true;
 }
 
 const char* TradeZeroClient::last_error() const {
