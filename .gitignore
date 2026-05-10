@@ -10,6 +10,11 @@ test_order_manager
 test_integration
 test_threading
 test_async_io
+test_tradezero_config
+test_tradezero_client
+test_tradezero_websocket
+test_chart_widget
+tsan_threading
 
 # Debug symbols
 *.dSYM/
