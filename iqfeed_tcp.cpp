@@ -689,8 +689,10 @@ void IQFeedLevel1::stream_thread() {
                     }
                 }
             }
+        } else {
+            // result == 0 is timeout - sleep briefly to avoid busy-waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        // result == 0 is timeout, just loop again
     }
     LOG_I("iqfeed", "L1 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
 }
@@ -1003,8 +1005,10 @@ void IQFeedLevel2::stream_thread() {
                     }
                 }
             }
+        } else {
+            // result == 0 is timeout - sleep briefly to avoid busy-waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        // result == 0 is timeout, just loop again
     }
     LOG_I("iqfeed", "L2 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
 }
