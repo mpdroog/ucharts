@@ -679,11 +679,14 @@ void IQFeedLevel1::stream_thread() {
                 }
             }
         } else if (result == -1) {
-            // Error/disconnect - try to reconnect
-            if (m_running) {
+            // Error/disconnect - keep trying to reconnect
+            while (m_running && m_socket < 0) {
                 std::this_thread::sleep_for(std::chrono::seconds(2));
-                if (m_running && !reconnect()) {
-                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                if (m_running) {
+                    reconnect();
+                    if (m_socket < 0) {
+                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                    }
                 }
             }
         }
@@ -990,11 +993,14 @@ void IQFeedLevel2::stream_thread() {
                 }
             }
         } else if (result == -1) {
-            // Error/disconnect - try to reconnect
-            if (m_running) {
+            // Error/disconnect - keep trying to reconnect
+            while (m_running && m_socket < 0) {
                 std::this_thread::sleep_for(std::chrono::seconds(2));
-                if (m_running && !reconnect()) {
-                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                if (m_running) {
+                    reconnect();
+                    if (m_socket < 0) {
+                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                    }
                 }
             }
         }

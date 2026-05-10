@@ -12,6 +12,7 @@ ChartWidget::ChartWidget()
       m_hovered_candle(-1), m_is_panning(false), m_pan_start_x(0), m_pan_start_pan(0),
       m_dragging_hline(-1), m_dragging_trendline(-1), m_dragging_trendline_point(-1),
       m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0),
+      m_auto_ma_period(9), m_auto_ma_is_ema(true),
       m_indicators_dirty(true), m_daily_candles(nullptr), m_sr_dirty(true), m_prev_daily_size(0) {
 }
 
@@ -314,86 +315,142 @@ void ChartWidget::calculate_auto_ma() {
     m_auto_ma_values.clear();
 
     if (m_candles.empty() || m_settings == nullptr) return;
+    if (m_candles.size() < 55) return;  // Need enough data
 
-    // Calculate all 4 MA types and find which one has lowest error
-    std::vector<float> ema9, sma9, ema21, sma21;
+    // Test common trading MA periods and pick the one with best "respect rate"
+    // Respect rate = bounces / (bounces + breaks)
+    const int PERIODS[] = {9, 13, 21, 34, 50};
+    const int NUM_PERIODS = 5;
 
-    // Calculate EMA9
-    ema9.resize(m_candles.size(), 0.0f);
-    {
-        float k = 2.0f / 10.0f;  // period 9
-        float sum = 0.0f;
-        for (int i = 0; i < 9 && i < static_cast<int>(m_candles.size()); i++) {
-            sum += m_candles[static_cast<size_t>(i)].close;
-        }
-        if (m_candles.size() >= 9) {
-            ema9[8] = sum / 9.0f;
-            for (size_t i = 9; i < m_candles.size(); i++) {
-                ema9[i] = m_candles[i].close * k + ema9[i - 1] * (1.0f - k);
+    // Calculate score for an MA - bounces weighted by rate and recency
+    // Returns negative if MA is not useful
+    auto calc_ma_score = [&](const std::vector<float>& ma) -> float {
+        int bounces = 0;
+        int breaks = 0;
+        int recent_bounces = 0;  // In last 20% of candles
+
+        size_t recent_start = m_candles.size() - m_candles.size() / 5;
+
+        for (size_t i = 1; i + 1 < m_candles.size(); i++) {
+            if (ma[i] <= 0.0f || ma[i-1] <= 0.0f) continue;
+
+            const Candle& prev = m_candles[i - 1];
+            const Candle& curr = m_candles[i];
+            const Candle& next = m_candles[i + 1];
+
+            // Tolerance for "near" MA (0.2% of MA value)
+            float tolerance = ma[i] * 0.002f;
+
+            // Where was price before? (previous candle entirely on one side)
+            bool was_above = prev.low > ma[i-1];   // Entire candle above MA
+            bool was_below = prev.high < ma[i-1];  // Entire candle below MA
+
+            if (was_above) {
+                // Price was above, check if it touched MA as support
+                bool touched_support = curr.low <= ma[i] + tolerance;
+                if (!touched_support) continue;
+
+                // Bounce = low didn't break significantly below MA
+                bool held_support = curr.low >= ma[i] - tolerance;
+                bool confirmed = next.close > ma[i];
+
+                if (held_support && confirmed) {
+                    bounces++;
+                    if (i >= recent_start) recent_bounces++;
+                } else {
+                    breaks++;
+                }
+            } else if (was_below) {
+                // Price was below, check if it touched MA as resistance
+                bool touched_resistance = curr.high >= ma[i] - tolerance;
+                if (!touched_resistance) continue;
+
+                // Bounce = high didn't break significantly above MA
+                bool held_resistance = curr.high <= ma[i] + tolerance;
+                bool confirmed = next.close < ma[i];
+
+                if (held_resistance && confirmed) {
+                    bounces++;
+                    if (i >= recent_start) recent_bounces++;
+                } else {
+                    breaks++;
+                }
             }
         }
-    }
 
-    // Calculate SMA9
-    sma9.resize(m_candles.size(), 0.0f);
-    for (size_t i = 8; i < m_candles.size(); i++) {
-        float sum = 0.0f;
-        for (int j = 0; j < 9; j++) {
-            sum += m_candles[i - static_cast<size_t>(j)].close;
-        }
-        sma9[i] = sum / 9.0f;
-    }
+        int total = bounces + breaks;
+        if (total < 3) return -1.0f;  // Not enough interactions
 
-    // Calculate EMA21
-    ema21.resize(m_candles.size(), 0.0f);
-    {
-        float k = 2.0f / 22.0f;  // period 21
-        float sum = 0.0f;
-        for (int i = 0; i < 21 && i < static_cast<int>(m_candles.size()); i++) {
-            sum += m_candles[static_cast<size_t>(i)].close;
-        }
-        if (m_candles.size() >= 21) {
-            ema21[20] = sum / 21.0f;
-            for (size_t i = 21; i < m_candles.size(); i++) {
-                ema21[i] = m_candles[i].close * k + ema21[i - 1] * (1.0f - k);
+        float rate = static_cast<float>(bounces) / static_cast<float>(total);
+        if (rate < 0.4f) return -1.0f;  // Less than 40% bounce rate = useless
+
+        // Score combines: bounce count, rate, and recency bonus
+        // More bounces = better, higher rate = better, recent bounces = better
+        return static_cast<float>(bounces) * rate + static_cast<float>(recent_bounces) * 2.0f;
+    };
+
+    float best_score = -1.0f;
+    int best_period = 0;
+    bool best_is_ema = true;
+    std::vector<float> best_ma;
+
+    std::vector<float> ma_values;
+    ma_values.resize(m_candles.size(), 0.0f);
+
+    for (int p = 0; p < NUM_PERIODS; p++) {
+        int period = PERIODS[p];
+        if (static_cast<size_t>(period) > m_candles.size()) continue;
+
+        // Calculate EMA for this period
+        std::fill(ma_values.begin(), ma_values.end(), 0.0f);
+        {
+            float k = 2.0f / (static_cast<float>(period) + 1.0f);
+            float sum = 0.0f;
+            for (int i = 0; i < period; i++) {
+                sum += m_candles[static_cast<size_t>(i)].close;
+            }
+            ma_values[static_cast<size_t>(period - 1)] = sum / static_cast<float>(period);
+            for (size_t i = static_cast<size_t>(period); i < m_candles.size(); i++) {
+                ma_values[i] = m_candles[i].close * k + ma_values[i - 1] * (1.0f - k);
             }
         }
-    }
 
-    // Calculate SMA21
-    sma21.resize(m_candles.size(), 0.0f);
-    for (size_t i = 20; i < m_candles.size(); i++) {
-        float sum = 0.0f;
-        for (int j = 0; j < 21; j++) {
-            sum += m_candles[i - static_cast<size_t>(j)].close;
+        float ema_score = calc_ma_score(ma_values);
+        if (ema_score > best_score) {
+            best_score = ema_score;
+            best_period = period;
+            best_is_ema = true;
+            best_ma = ma_values;
         }
-        sma21[i] = sum / 21.0f;
+
+        // Calculate SMA for this period
+        std::fill(ma_values.begin(), ma_values.end(), 0.0f);
+        for (size_t i = static_cast<size_t>(period - 1); i < m_candles.size(); i++) {
+            float sum = 0.0f;
+            for (int j = 0; j < period; j++) {
+                sum += m_candles[i - static_cast<size_t>(j)].close;
+            }
+            ma_values[i] = sum / static_cast<float>(period);
+        }
+
+        float sma_score = calc_ma_score(ma_values);
+        if (sma_score > best_score) {
+            best_score = sma_score;
+            best_period = period;
+            best_is_ema = false;
+            best_ma = ma_values;
+        }
     }
 
-    // Calculate error for each
-    float err_ema9 = calculate_ma_error(ema9);
-    float err_sma9 = calculate_ma_error(sma9);
-    float err_ema21 = calculate_ma_error(ema21);
-    float err_sma21 = calculate_ma_error(sma21);
-
-    // Find minimum error and select that MA
-    float min_error = err_ema9;
-    m_settings->auto_ma_type = AutoMAType::EMA9;
-    m_auto_ma_values = ema9;
-
-    if (err_sma9 < min_error) {
-        min_error = err_sma9;
-        m_settings->auto_ma_type = AutoMAType::SMA9;
-        m_auto_ma_values = sma9;
-    }
-    if (err_ema21 < min_error) {
-        min_error = err_ema21;
-        m_settings->auto_ma_type = AutoMAType::EMA21;
-        m_auto_ma_values = ema21;
-    }
-    if (err_sma21 < min_error) {
-        m_settings->auto_ma_type = AutoMAType::SMA21;
-        m_auto_ma_values = sma21;
+    // Only show MA if we found one that's actually respected
+    if (best_score > 0.0f) {
+        m_auto_ma_values = best_ma;
+        m_auto_ma_period = best_period;
+        m_auto_ma_is_ema = best_is_ema;
+    } else {
+        // No MA is respected well enough - don't show any
+        m_auto_ma_values.clear();
+        m_auto_ma_period = 0;
     }
 }
 
@@ -957,16 +1014,10 @@ bool ChartWidget::render(ImVec2 size) {
                     make_color(255, 200, 50), 1.5f);  // Gold/yellow
             }
         }
-        // Draw MA type label in top-right
-        const char* ma_label = "";
-        switch (m_settings->auto_ma_type) {
-            case AutoMAType::NONE: break;
-            case AutoMAType::EMA9: ma_label = "EMA9"; break;
-            case AutoMAType::SMA9: ma_label = "SMA9"; break;
-            case AutoMAType::EMA21: ma_label = "EMA21"; break;
-            case AutoMAType::SMA21: ma_label = "SMA21"; break;
-        }
-        if (ma_label[0] != '\0') {
+        // Draw MA type label in top-right (dynamic period)
+        if (m_auto_ma_period > 0) {
+            char ma_label[16];
+            std::snprintf(ma_label, sizeof(ma_label), "%s%d", m_auto_ma_is_ema ? "EMA" : "SMA", m_auto_ma_period);
             draw_list->AddText(
                 ImVec2(chart_pos.x + canvas_size.x - padding_right - 50, chart_pos.y + padding_top + 5),
                 make_color(255, 200, 50), ma_label);

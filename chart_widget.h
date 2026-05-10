@@ -96,6 +96,8 @@ private:
     std::vector<float> m_vwap_values;        // VWAP line
     std::vector<float> m_cumulative_delta;   // Cumulative delta values
     std::vector<float> m_auto_ma_values;     // Auto-selected MA values
+    int m_auto_ma_period;                    // Best MA period found (5-50)
+    bool m_auto_ma_is_ema;                   // True if EMA, false if SMA
     bool m_indicators_dirty;  // Set when candles/settings change
     std::string m_symbol;     // Current symbol being displayed
 
