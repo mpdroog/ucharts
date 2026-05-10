@@ -23,5 +23,8 @@ imgui/
 # ImGui settings
 imgui.ini
 
+# TradeZero API credentials (NEVER commit this)
+config.ini
+
 # macOS
 .DS_Store

@@ -1,0 +1,65 @@
+// tradezero_client.h - REST API client for TradeZero
+#ifndef TRADEZERO_CLIENT_H
+#define TRADEZERO_CLIENT_H
+
+#include "types.h"
+#include <string>
+#include <vector>
+
+// TradeZero API response structure
+struct TZResponse {
+    int status_code;
+    std::string body;
+    std::string error;
+    bool success;
+
+    TZResponse() : status_code(0), success(false) {}
+};
+
+// TradeZero REST API client
+// Purpose: Order placement/cancellation and initial data sync
+// Account data comes from P&L WebSocket stream
+class TradeZeroClient {
+public:
+    TradeZeroClient();
+    ~TradeZeroClient();
+
+    // Configuration
+    void set_credentials(const char* api_key_id, const char* api_secret_key, const char* account_id);
+    bool is_configured() const;
+
+    // Initial data sync (before WebSocket subscription)
+    TZResponse get_positions();
+    TZResponse get_orders();
+
+    // Order operations (no WebSocket equivalent)
+    TZResponse place_order(const char* symbol, int quantity, const char* side,
+                          const char* order_type, float limit_price, float stop_price);
+    TZResponse cancel_order(const char* client_order_id);
+    TZResponse cancel_all_orders();
+
+    // Parse JSON responses
+    bool parse_positions(const std::string& json, std::vector<Position>& positions);
+    bool parse_orders(const std::string& json, std::vector<Order>& orders);
+
+    // Get last error
+    const char* last_error() const;
+
+private:
+    char m_api_key_id[128];
+    char m_api_secret_key[128];
+    char m_account_id[32];
+    char m_error[256];
+    int m_timeout;  // Request timeout in seconds
+
+    // Build URL for API endpoint
+    std::string build_url(const char* endpoint) const;
+
+    // Make HTTP request with authentication headers
+    TZResponse make_request(const char* method, const char* endpoint, const char* body = nullptr);
+};
+
+// Global TradeZero client instance
+TradeZeroClient& get_tradezero_client();
+
+#endif // TRADEZERO_CLIENT_H

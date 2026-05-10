@@ -112,6 +112,7 @@ struct TimeSalesEntry {
 struct Order {
     int64_t id;
     char symbol[8];
+    char client_order_id[64];  // TradeZero client order ID
     OrderSide side;
     int quantity;
     int filled;
@@ -122,6 +123,7 @@ struct Order {
     Order() : id(0), side(OrderSide::BUY), quantity(0), filled(0),
               price(0), status(OrderStatus::PENDING), created_at(0) {
         symbol[0] = '\0';
+        client_order_id[0] = '\0';
     }
 
     int pending_qty() const { return quantity - filled; }

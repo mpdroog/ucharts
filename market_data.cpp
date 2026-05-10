@@ -170,8 +170,17 @@ bool MarketData::subscribe_quotes(const char* symbol) {
 }
 
 bool MarketData::unsubscribe_quotes(const char* symbol) {
-    (void)get_iqfeed_level1().unwatch(symbol);
-    (void)get_iqfeed_level2().unwatch(symbol);
+    bool l1_ok = get_iqfeed_level1().unwatch(symbol);
+    if (!l1_ok) {
+        LOG_W("market", "Failed to unwatch L1 for %s during cleanup", symbol);
+    }
+
+    bool l2_ok = get_iqfeed_level2().unwatch(symbol);
+    if (!l2_ok) {
+        LOG_W("market", "Failed to unwatch L2 for %s during cleanup", symbol);
+    }
+
+    // Return true even if unwatch fails - cleanup is best-effort
     return true;
 }
 
@@ -1032,7 +1041,10 @@ void MarketData::on_lookup_result(const LookupResult& result) {
 
     // Subscribe to L1/L2 for real-time updates (outside lock to avoid deadlock)
     if (should_subscribe) {
-        (void)subscribe_quotes(sym_to_subscribe.c_str());
+        if (!subscribe_quotes(sym_to_subscribe.c_str())) {
+            LOG_W("market", "Failed to subscribe to quotes for %s - will use file data only",
+                  sym_to_subscribe.c_str());
+        }
     }
 }
 

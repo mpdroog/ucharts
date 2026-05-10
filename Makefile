@@ -65,8 +65,8 @@ ifeq ($(UNAME_S), Darwin)
     IMGUI_CXXFLAGS += -I/opt/homebrew/include -I/usr/local/include
     TEST_CXXFLAGS += -I/opt/homebrew/include -I/usr/local/include
     LDFLAGS += -L/opt/homebrew/lib -L/usr/local/lib
-    LDFLAGS += -lglfw -lsqlite3 -lcurl -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo
-    TEST_LDFLAGS = -L/opt/homebrew/lib -L/usr/local/lib -lsqlite3 -lcurl
+    LDFLAGS += -lglfw -lsqlite3 -lcurl -lwebsockets -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo
+    TEST_LDFLAGS = -L/opt/homebrew/lib -L/usr/local/lib -lsqlite3 -lcurl -lwebsockets
 else
     # Linux
     LDFLAGS += -lglfw -lGL -ldl -lsqlite3 -lcurl
@@ -88,7 +88,7 @@ CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 IMGUI_CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 
 # Main sources
-MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
+MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp
 MAIN_OBJS = $(MAIN_SRCS:.cpp=.o)
 
 TARGET = ucharts
@@ -120,7 +120,7 @@ check-deps:
 	fi
 
 # Test targets
-test: test_logic test_database test_market_data test_order_manager test_integration test_async_io
+test: test_logic test_database test_market_data test_order_manager test_integration test_async_io test_tradezero_config test_tradezero_client test_tradezero_websocket
 	@echo "Running logic tests..."
 	./test_logic
 	@echo ""
@@ -138,6 +138,15 @@ test: test_logic test_database test_market_data test_order_manager test_integrat
 	@echo ""
 	@echo "Running async I/O tests..."
 	./test_async_io
+	@echo ""
+	@echo "Running TradeZero config tests..."
+	./test_tradezero_config
+	@echo ""
+	@echo "Running TradeZero client tests..."
+	./test_tradezero_client
+	@echo ""
+	@echo "Running TradeZero WebSocket tests..."
+	./test_tradezero_websocket
 	@echo ""
 	@echo "All tests passed!"
 
@@ -162,6 +171,15 @@ test_async_io: test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp
 test_threading: test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp
 	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
 
+test_tradezero_config: test_tradezero_config.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_tradezero_config.cpp
+
+test_tradezero_client: test_tradezero_client.cpp tradezero_client.cpp http_client.cpp json_parser.cpp
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_tradezero_client.cpp tradezero_client.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
+
+test_tradezero_websocket: test_tradezero_websocket.cpp tradezero_websocket.cpp
+	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_tradezero_websocket.cpp tradezero_websocket.cpp $(TEST_LDFLAGS)
+
 # ThreadSanitizer targets - build with TSan to detect race conditions
 tsan: tsan_threading
 	@echo "Running ThreadSanitizer tests..."
@@ -185,7 +203,7 @@ thread-check-strict:
 	@echo "Strict analysis complete (some warnings expected - documents lock acquisition points)!"
 
 clean:
-	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_ucharts.db test_order_manager.db test_integration.db
+	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_tradezero_config test_tradezero_client test_tradezero_websocket test_ucharts.db test_order_manager.db test_integration.db
 
 clean-all: clean
 	rm -rf $(IMGUI_DIR)

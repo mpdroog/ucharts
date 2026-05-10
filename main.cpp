@@ -17,6 +17,8 @@
 #include "ticker_widget.h"
 #include "positions_widget.h"
 #include "iqfeed_tcp.h"
+#include "tradezero_client.h"
+#include "tradezero_websocket.h"
 #include "logger.h"
 
 #include <cstdio>
@@ -29,6 +31,119 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <mutex>
+
+// TradeZero configuration
+struct TZConfig {
+    char api_key_id[128];
+    char api_secret_key[128];
+    char account_id[32];
+    bool enabled;
+
+    TZConfig() : enabled(false) {
+        api_key_id[0] = '\0';
+        api_secret_key[0] = '\0';
+        account_id[0] = '\0';
+    }
+};
+
+// Simple INI parser for TradeZero config
+[[maybe_unused]] static bool load_tradezero_config(const char* ini_path, TZConfig& config) {
+    FILE* file = std::fopen(ini_path, "r");
+    if (file == nullptr) {
+        LOG_W("config", "Config file not found: %s", ini_path);
+        return false;
+    }
+
+    char line[512];
+    bool in_tradezero_section = false;
+
+    while (std::fgets(line, sizeof(line), file)) {
+        // Remove leading/trailing whitespace
+        char* start = line;
+        while (*start == ' ' || *start == '\t') start++;
+        char* end = start + std::strlen(start) - 1;
+        while (end > start && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t')) {
+            *end = '\0';
+            end--;
+        }
+
+        // Skip empty lines and comments
+        if (*start == '\0' || *start == '#' || *start == ';') {
+            continue;
+        }
+
+        // Check for [tradezero] section
+        if (*start == '[') {
+            in_tradezero_section = (std::strcmp(start, "[tradezero]") == 0);
+            continue;
+        }
+
+        // Parse key=value pairs in [tradezero] section
+        if (in_tradezero_section) {
+            char* equals = std::strchr(start, '=');
+            if (equals == nullptr) continue;
+
+            // Extract key
+            *equals = '\0';
+            char* key = start;
+            char* key_end = equals - 1;
+            while (key_end > key && (*key_end == ' ' || *key_end == '\t')) {
+                *key_end = '\0';
+                key_end--;
+            }
+
+            // Extract value
+            char* value = equals + 1;
+            while (*value == ' ' || *value == '\t') value++;
+
+            // Store values
+            if (std::strcmp(key, "api_key_id") == 0) {
+                std::strncpy(config.api_key_id, value, sizeof(config.api_key_id) - 1);
+                config.api_key_id[sizeof(config.api_key_id) - 1] = '\0';
+            } else if (std::strcmp(key, "api_secret_key") == 0) {
+                std::strncpy(config.api_secret_key, value, sizeof(config.api_secret_key) - 1);
+                config.api_secret_key[sizeof(config.api_secret_key) - 1] = '\0';
+            } else if (std::strcmp(key, "account_id") == 0) {
+                std::strncpy(config.account_id, value, sizeof(config.account_id) - 1);
+                config.account_id[sizeof(config.account_id) - 1] = '\0';
+            } else if (std::strcmp(key, "enabled") == 0) {
+                config.enabled = (std::strcmp(value, "1") == 0 || std::strcmp(value, "true") == 0);
+            }
+        }
+    }
+
+    std::fclose(file);
+
+    // Validate required fields if enabled
+    if (config.enabled) {
+        if (config.api_key_id[0] == '\0' || config.api_secret_key[0] == '\0' || config.account_id[0] == '\0') {
+            LOG_E("config", "TradeZero enabled but missing required credentials");
+            return false;
+        }
+    }
+
+    LOG_I("config", "TradeZero config loaded: enabled=%d, account_id=%s",
+          config.enabled, config.enabled ? config.account_id : "N/A");
+
+    return true;
+}
+
+// TradeZero account info structure
+struct TZAccountInfo {
+    float equity;
+    float buying_power;
+    float cash_balance;
+    float day_pnl;
+    int day_trades_remaining;
+
+    TZAccountInfo() : equity(0), buying_power(0), cash_balance(0),
+                      day_pnl(0), day_trades_remaining(0) {}
+};
+
+// Global TradeZero account info cache (updated by WebSocket callbacks)
+static TZAccountInfo g_tz_account_info;
+static std::mutex g_tz_account_mutex;
 
 // Global state
 static Database g_database;
@@ -422,6 +537,117 @@ int main(int argc, char** argv) {
     g_ticker_widgets[0].set_selected(true);
     g_selected_ticker = 0;
 
+    // Initialize TradeZero integration
+    TZConfig tz_config;
+    if (load_tradezero_config("config.ini", tz_config) && tz_config.enabled) {
+        LOG_I("tradezero", "Initializing TradeZero integration...");
+
+        // Configure REST client
+        get_tradezero_client().set_credentials(
+            tz_config.api_key_id,
+            tz_config.api_secret_key,
+            tz_config.account_id
+        );
+
+        // Configure WebSocket clients
+        get_tradezero_pnl().set_credentials(
+            tz_config.api_key_id,
+            tz_config.api_secret_key,
+            tz_config.account_id
+        );
+
+        get_tradezero_portfolio().set_credentials(
+            tz_config.api_key_id,
+            tz_config.api_secret_key,
+            tz_config.account_id
+        );
+
+        // Set TradeZero client in order manager
+        g_order_manager.set_tradezero_client(&get_tradezero_client());
+
+        // Set WebSocket callbacks BEFORE connecting
+        get_tradezero_pnl().set_pnl_snapshot_callback([](const TZPnLSnapshot& snapshot) {
+            std::lock_guard<std::mutex> lock(g_tz_account_mutex);
+            g_tz_account_info.equity = snapshot.account_value;
+            g_tz_account_info.buying_power = snapshot.buying_power;
+            g_tz_account_info.cash_balance = snapshot.available_cash;
+            g_tz_account_info.day_pnl = snapshot.day_pnl;
+            g_tz_account_info.day_trades_remaining = snapshot.day_trades_remaining;
+
+            // Also update order manager with initial positions
+            g_order_manager.on_tradezero_pnl_snapshot(snapshot);
+        });
+
+        get_tradezero_pnl().set_agg_update_callback([](const TZAggUpdate& update) {
+            std::lock_guard<std::mutex> lock(g_tz_account_mutex);
+            g_tz_account_info.equity = update.account_value;
+            g_tz_account_info.day_pnl = update.day_pnl;
+        });
+
+        get_tradezero_portfolio().set_order_callback([](const TZOrderUpdate& update) {
+            g_order_manager.on_tradezero_order_update(update);
+        });
+
+        get_tradezero_portfolio().set_position_callback([](const TZPositionUpdate& update) {
+            g_order_manager.on_tradezero_position_update(update);
+        });
+
+        // Initialize in background thread (per TradeZero docs)
+        std::thread([]{
+            LOG_I("tradezero", "Connecting TradeZero WebSocket streams...");
+
+            // Step 1: Start Portfolio WebSocket (starts buffering)
+            if (!get_tradezero_portfolio().connect(TZStream::PORTFOLIO)) {
+                LOG_E("tradezero", "Failed to connect Portfolio stream: %s",
+                      get_tradezero_portfolio().last_error());
+                return;
+            }
+
+            // Step 2: Fetch REST snapshot (positions, orders)
+            TZResponse resp = get_tradezero_client().get_positions();
+            if (resp.success) {
+                std::vector<Position> positions;
+                if (get_tradezero_client().parse_positions(resp.body, positions)) {
+                    LOG_I("tradezero", "Fetched %zu positions from REST API", positions.size());
+                    // Load positions into order manager
+                    g_order_manager.load_tradezero_positions(positions);
+                } else {
+                    LOG_W("tradezero", "Failed to parse positions from REST API");
+                }
+            } else {
+                LOG_W("tradezero", "Failed to fetch initial positions: %s", resp.error.c_str());
+            }
+
+            resp = get_tradezero_client().get_orders();
+            if (resp.success) {
+                std::vector<Order> orders;
+                if (get_tradezero_client().parse_orders(resp.body, orders)) {
+                    LOG_I("tradezero", "Fetched %zu orders from REST API", orders.size());
+                    // Load orders into order manager
+                    g_order_manager.load_tradezero_orders(orders);
+                } else {
+                    LOG_W("tradezero", "Failed to parse orders from REST API");
+                }
+            } else {
+                LOG_W("tradezero", "Failed to fetch initial orders: %s", resp.error.c_str());
+            }
+
+            // Step 3: Portfolio WebSocket is already connected and subscribed
+            // It's now processing buffered + new messages
+
+            // Step 4: Connect P&L stream (has initial snapshot)
+            if (!get_tradezero_pnl().connect(TZStream::PNL)) {
+                LOG_E("tradezero", "Failed to connect P&L stream: %s",
+                      get_tradezero_pnl().last_error());
+                return;
+            }
+
+            LOG_I("tradezero", "TradeZero connected successfully");
+        }).detach();
+    } else {
+        LOG_I("tradezero", "TradeZero integration disabled or not configured");
+    }
+
     constexpr auto TARGET_FRAME_TIME = std::chrono::milliseconds(16);  // ~60 FPS
 
     // CPU profiling counters
@@ -455,7 +681,9 @@ int main(int argc, char** argv) {
                         if (!has_daily || !has_1m || !has_5m) {
                             LOG_I("main", "Retrying missing data for %s (daily=%d, 1m=%d, 5m=%d)",
                                   sym, has_daily ? 1 : 0, has_1m ? 1 : 0, has_5m ? 1 : 0);
-                            (void)get_market_data().load_symbol(sym);
+                            if (!get_market_data().load_symbol(sym)) {
+                                LOG_W("main", "Retry failed for %s - will try again later", sym);
+                            }
                         }
                     }
                 }
@@ -468,8 +696,8 @@ int main(int argc, char** argv) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // Process order fills
-        g_order_manager.process_fills();
+        // TradeZero: Order fills come from WebSocket callbacks
+        // CSV simulation process_fills() removed
         g_order_manager.update_prices();
 
         // Process hotkeys
@@ -539,6 +767,13 @@ int main(int argc, char** argv) {
         ImGui::TextColored(lu_ok ? col_green : col_red, "LU");
         ImGui::SameLine();
 
+        // TradeZero status indicator
+        bool tz_rest_ok = get_tradezero_client().is_configured();
+        bool tz_ws_ok = get_tradezero_portfolio().is_connected() && get_tradezero_pnl().is_connected();
+        bool tz_ok = tz_rest_ok && tz_ws_ok;
+        ImGui::TextColored(tz_ok ? col_green : col_red, "TZ");
+        ImGui::SameLine();
+
         // Clock (centered)
         char time_str[32];
         get_nyc_time(time_str, sizeof(time_str));
@@ -546,6 +781,50 @@ int main(int argc, char** argv) {
         float text_width = ImGui::CalcTextSize(time_str).x;
         ImGui::SetCursorPosX((window_width - text_width) / 2.0f);
         ImGui::Text("%s", time_str);
+
+        // Account info (right-aligned) - only show if TradeZero is connected
+        if (tz_ok) {
+            TZAccountInfo account;
+            {
+                std::lock_guard<std::mutex> lock(g_tz_account_mutex);
+                account = g_tz_account_info;
+            }
+
+            // Build account info string
+            char account_text[256];
+            std::snprintf(account_text, sizeof(account_text),
+                         "Equity: $%.2f | BP: $%.0f | Cash: $%.2f | P&L: %+.2f | DT: %d",
+                         static_cast<double>(account.equity),
+                         static_cast<double>(account.buying_power),
+                         static_cast<double>(account.cash_balance),
+                         static_cast<double>(account.day_pnl),
+                         account.day_trades_remaining);
+
+            // Calculate position for right alignment
+            float account_text_width = ImGui::CalcTextSize(account_text).x;
+            float cursor_y = ImGui::GetCursorPosY();
+            ImGui::SetCursorPosY(cursor_y - ImGui::GetTextLineHeight());
+            ImGui::SetCursorPosX(window_width - account_text_width - 10.0f);
+
+            // Render with color coding for P&L and day trades
+            ImGui::Text("Equity: $%.2f | BP: $%.0f | Cash: $%.2f | ",
+                       static_cast<double>(account.equity),
+                       static_cast<double>(account.buying_power),
+                       static_cast<double>(account.cash_balance));
+            ImGui::SameLine();
+
+            ImVec4 pnl_color = (account.day_pnl >= 0) ? col_green : col_red;
+            ImGui::TextColored(pnl_color, "P&L: %+.2f", static_cast<double>(account.day_pnl));
+            ImGui::SameLine();
+
+            ImVec4 dt_color = col_green;
+            if (account.day_trades_remaining == 0) {
+                dt_color = col_red;
+            } else if (account.day_trades_remaining <= 2) {
+                dt_color = ImVec4(0.8f, 0.8f, 0.0f, 1.0f);  // Yellow
+            }
+            ImGui::TextColored(dt_color, " | DT: %d", account.day_trades_remaining);
+        }
 
         ImGui::Separator();
 
@@ -822,6 +1101,11 @@ int main(int argc, char** argv) {
     get_iqfeed_lookup().disconnect();
     get_iqfeed_level1().disconnect();
     get_iqfeed_level2().disconnect();
+
+    // Disconnect TradeZero WebSocket streams
+    get_tradezero_pnl().disconnect();
+    get_tradezero_portfolio().disconnect();
+    LOG_I("tradezero", "TradeZero disconnected");
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
