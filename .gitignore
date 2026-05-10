@@ -16,6 +16,12 @@ test_tradezero_websocket
 test_chart_widget
 tsan_threading
 
+# Contrib mock servers
+contrib/fake_iqfeed
+contrib/fake_tradezero
+contrib/test_with_mocks
+contrib/.fake_*.pid
+
 # Debug symbols
 *.dSYM/
 
