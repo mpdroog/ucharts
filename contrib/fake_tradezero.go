@@ -92,6 +92,8 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer r.Body.Close()
+
 	var req struct {
 		Symbol      string  `json:"symbol"`
 		Quantity    int     `json:"quantity"`

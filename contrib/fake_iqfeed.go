@@ -139,6 +139,7 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 				// Send header
 				if _, err := conn.Write([]byte("LH,TimeStamp,High,Low,Open,Close,PeriodVolume,OpenInterest\r\n")); err != nil {
 					logError("Lookup: Failed to write HDX header: %v", err)
+					return
 				}
 
 				// Send fake candles
@@ -146,12 +147,14 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 				for _, candle := range candles {
 					if _, err := conn.Write([]byte(candle + "\r\n")); err != nil {
 						logError("Lookup: Failed to write HDX candle: %v", err)
+						return
 					}
 				}
 
 				// End marker
 				if _, err := conn.Write([]byte("!ENDMSG!,\r\n")); err != nil {
 					logError("Lookup: Failed to write HDX end marker: %v", err)
+					return
 				}
 			}
 
@@ -163,6 +166,7 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 				// Send header
 				if _, err := conn.Write([]byte("LH,TimeStamp,High,Low,Open,Close,TotalVolume,PeriodVolume\r\n")); err != nil {
 					logError("Lookup: Failed to write HIX header: %v", err)
+					return
 				}
 
 				// Send fake minute candles
@@ -180,6 +184,7 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 						high, low, open, close, volume, volume)
 					if _, err := conn.Write([]byte(line + "\r\n")); err != nil {
 						logError("Lookup: Failed to write HIX candle: %v", err)
+						return
 					}
 
 					basePrice = close
@@ -187,6 +192,7 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 
 				if _, err := conn.Write([]byte("!ENDMSG!,\r\n")); err != nil {
 					logError("Lookup: Failed to write HIX end marker: %v", err)
+					return
 				}
 			}
 
@@ -194,6 +200,7 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 			logInfo("Lookup: System command")
 			if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
 				logError("Lookup: Failed to write system response: %v", err)
+				return
 			}
 
 		default:
@@ -244,13 +251,18 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 				return
 			case <-ticker.C:
 				watchedMu.RLock()
+				symbols := make([]string, 0, len(watchedSymbols))
 				for symbol := range watchedSymbols {
+					symbols = append(symbols, symbol)
+				}
+				watchedMu.RUnlock()
+				for _, symbol := range symbols {
 					quote := generateFakeL1Quote(symbol)
 					if _, err := conn.Write([]byte(quote + "\r\n")); err != nil {
 						logError("Level1: Failed to write quote for %s: %v", symbol, err)
+						return
 					}
 				}
-				watchedMu.RUnlock()
 			}
 		}
 	}()
@@ -298,6 +310,7 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 				quote := generateFakeL1Quote(symbol)
 				if _, err := conn.Write([]byte(quote + "\r\n")); err != nil {
 					logError("Level1: Failed to write initial quote for %s: %v", symbol, err)
+					break
 				}
 
 			case 'r': // Unwatch
@@ -309,6 +322,7 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 			case 'S': // System
 				if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
 					logError("Level1: Failed to write system response: %v", err)
+					break
 				}
 			}
 		}
@@ -343,13 +357,18 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 				return
 			case <-ticker.C:
 				watchedMu.RLock()
+				symbols := make([]string, 0, len(watched))
 				for symbol := range watched {
+					symbols = append(symbols, symbol)
+				}
+				watchedMu.RUnlock()
+				for _, symbol := range symbols {
 					update := generateFakeL2Update(symbol)
 					if _, err := conn.Write([]byte(update + "\r\n")); err != nil {
 						logError("Level2: Failed to write update for %s: %v", symbol, err)
+						return
 					}
 				}
-				watchedMu.RUnlock()
 			}
 		}
 	}()
@@ -411,7 +430,8 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 			// Format per API spec: 7,Symbol,Side,Price,Size,OrderCount,Time,Date
 			timeStr := time.Now().Format("15:04:05")
 			dateStr := time.Now().Format("2006-01-02")
-			for i := 0; i < 5; i++ {
+			writeErr := false
+			for i := 0; i < 5 && !writeErr; i++ {
 				bidPrice := 99.90 - float64(i)*0.01
 				askPrice := 100.00 + float64(i)*0.01
 				size := 100 * (1 + rand.Intn(10))
@@ -419,10 +439,17 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 
 				if _, err := conn.Write([]byte(fmt.Sprintf("7,%s,B,%.4f,%d,%d,%s,%s\r\n", symbol, bidPrice, size, orderCount, timeStr, dateStr))); err != nil {
 					logError("Level2: Failed to write BID snapshot for %s: %v", symbol, err)
+					writeErr = true
+					break
 				}
 				if _, err := conn.Write([]byte(fmt.Sprintf("7,%s,A,%.4f,%d,%d,%s,%s\r\n", symbol, askPrice, size, orderCount, timeStr, dateStr))); err != nil {
 					logError("Level2: Failed to write ASK snapshot for %s: %v", symbol, err)
+					writeErr = true
+					break
 				}
+			}
+			if writeErr {
+				break
 			}
 
 		case "RPL", "r": // Unwatch price levels
@@ -434,6 +461,7 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 		case "S": // System
 			if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
 				logError("Level2: Failed to write system response: %v", err)
+				break
 			}
 		}
 	}
@@ -442,7 +470,7 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 	logInfo("Level2: Client disconnected")
 }
 
-func runTCPServer(ctx context.Context, port int, name string, handler func(net.Conn, context.Context)) {
+func runTCPServer(ctx context.Context, wg *sync.WaitGroup, port int, name string, handler func(net.Conn, context.Context)) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		logError("Failed to start %s server on port %d: %v", name, port, err)
@@ -469,7 +497,11 @@ func runTCPServer(ctx context.Context, port int, name string, handler func(net.C
 			}
 		}
 
-		go handler(conn, ctx)
+		wg.Add(1)
+		go func(c net.Conn) {
+			defer wg.Done()
+			handler(c, ctx)
+		}(conn)
 	}
 }
 
@@ -497,16 +529,30 @@ func main() {
 		cancel()
 	}()
 
-	// Start servers
-	go runTCPServer(ctx, *lookupPort, "Lookup", handleLookupClient)
-	go runTCPServer(ctx, *level1Port, "Level1", handleLevel1Client)
-	go runTCPServer(ctx, *level2Port, "Level2", handleLevel2Client)
+	// WaitGroup to track handler goroutines
+	var wg sync.WaitGroup
 
-	// Wait for shutdown
+	// Start servers
+	go runTCPServer(ctx, &wg, *lookupPort, "Lookup", handleLookupClient)
+	go runTCPServer(ctx, &wg, *level1Port, "Level1", handleLevel1Client)
+	go runTCPServer(ctx, &wg, *level2Port, "Level2", handleLevel2Client)
+
+	// Wait for shutdown signal
 	<-ctx.Done()
 
-	// Give servers a moment to clean up
-	time.Sleep(100 * time.Millisecond)
+	// Wait for all handlers to finish (with timeout)
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logInfo("All handlers finished")
+	case <-time.After(2 * time.Second):
+		logInfo("Timeout waiting for handlers, forcing shutdown")
+	}
 
 	logInfo("Server stopped")
 }
