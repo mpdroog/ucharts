@@ -57,35 +57,51 @@ func generateFakeCandles(symbol string, count int) []string {
 }
 
 // generateFakeL1Quote generates a fake Level 1 quote
-func generateFakeL1Quote(symbol string) string {
+// msgType: 'P' for summary (initial), 'Q' for update (streaming)
+// Format matches S,SELECT UPDATE FIELDS response order:
+// Symbol,Last,Last Size,Last Time,Total Volume,Bid,Bid Size,Ask,Ask Size,High,Low,Open,Close
+func generateFakeL1Quote(symbol string, msgType byte) string {
 	bid := 99.90 + rand.Float64()*0.10
 	ask := bid + 0.05 + rand.Float64()*0.10
 	last := bid + rand.Float64()*(ask-bid)
-	volume := int64(1000 + rand.Intn(9000))
+	lastSize := 100 * (1 + rand.Intn(10))
+	volume := int64(100000 + rand.Intn(900000))
+	high := last + rand.Float64()*2
+	low := last - rand.Float64()*2
+	open := low + rand.Float64()*(high-low)
+	closePrice := open + (rand.Float64()-0.5)*1
+	timeStr := time.Now().Format("15:04:05.000000")
 
-	return fmt.Sprintf("Q,%s,%.2f,100,%.2f,200,%.2f,%d,09:30:00",
-		symbol, bid, ask, last, volume)
+	return fmt.Sprintf("%c,%s,%.2f,%d,%s,%d,%.2f,%d,%.2f,%d,%.2f,%.2f,%.2f,%.2f",
+		msgType, symbol, last, lastSize, timeStr, volume,
+		bid, 100, ask, 200, high, low, open, closePrice)
 }
 
-// generateFakeL2Update generates a fake Level 2 price level update
-// Per IQFeed API spec (l2.txt), price level messages use:
-// 7 = Price Level Summary, 8 = Price Level Update, 9 = Price Level Delete
-// Format: 8,Symbol,Side,Price,Size,OrderCount,Time,Date
-func generateFakeL2Update(symbol string) string {
-	side := "B" // B=Bid, A=Ask per spec
+// generateFakeL2Order generates a fake Level 2 order message (for equities)
+// Per IQFeed API spec, order messages use:
+// 6 = Order Summary, 3 = Order Add, 4 = Order Update, 5 = Order Delete
+// Format: 6,Symbol,OrderID,MMID,Side,Price,Size,Priority,Precision,Time,Date
+// For equities, OrderID is typically empty and MMID contains market maker ID
+func generateFakeL2Order(symbol string, msgType byte) string {
+	side := "B" // B=Bid, A=Ask
 	if rand.Intn(2) == 1 {
 		side = "A"
 	}
 
+	// Generate fake market maker IDs
+	mmids := []string{"NSDQ", "ARCA", "BATS", "EDGX", "NYSE", "AMEX"}
+	mmid := mmids[rand.Intn(len(mmids))]
+
 	price := 99.90 + rand.Float64()*0.20
 	size := 100 * (1 + rand.Intn(10))
-	orderCount := 1 + rand.Intn(5)
-	timeStr := time.Now().Format("15:04:05")
+	priority := rand.Intn(1000)
+	precision := 4
+	timeStr := time.Now().Format("15:04:05.000")
 	dateStr := time.Now().Format("2006-01-02")
 
-	// Use message type 8 for updates
-	return fmt.Sprintf("8,%s,%s,%.4f,%d,%d,%s,%s",
-		symbol, side, price, size, orderCount, timeStr, dateStr)
+	// OrderID is empty for equity L2, MMID identifies the source
+	return fmt.Sprintf("%c,%s,,%s,%s,%.4f,%d,%d,%d,%s,%s",
+		msgType, symbol, mmid, side, price, size, priority, precision, timeStr, dateStr)
 }
 
 // handleLookupClient handles a connection to the Lookup port
@@ -256,7 +272,7 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 				}
 				watchedMu.RUnlock()
 				for _, symbol := range symbols {
-					quote := generateFakeL1Quote(symbol)
+					quote := generateFakeL1Quote(symbol, 'Q') // Q for streaming updates
 					if _, err := conn.Write([]byte(quote + "\r\n")); err != nil {
 						logError("Level1: Failed to write quote for %s: %v", symbol, err)
 						return
@@ -301,12 +317,12 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 			switch cmd {
 			case 'w': // Watch
 				watchedMu.Lock()
-				watchedSymbols[symbol] = true
+				watchedSymbols[strings.ToUpper(symbol)] = true
 				watchedMu.Unlock()
 				logInfo("Level1: Watching %s", symbol)
 
-				// Send initial quote
-				quote := generateFakeL1Quote(symbol)
+				// Send initial quote (P = summary message)
+				quote := generateFakeL1Quote(strings.ToUpper(symbol), 'P')
 				if _, err := conn.Write([]byte(quote + "\r\n")); err != nil {
 					logError("Level1: Failed to write initial quote for %s: %v", symbol, err)
 					break
@@ -318,10 +334,26 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 				watchedMu.Unlock()
 				logInfo("Level1: Unwatching %s", symbol)
 
-			case 'S': // System
-				if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
-					logError("Level1: Failed to write system response: %v", err)
-					break
+			case 'S': // System command
+				if strings.HasPrefix(symbol, ",SET PROTOCOL") {
+					if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
+						logError("Level1: Failed to write protocol response: %v", err)
+						break
+					}
+				} else if strings.HasPrefix(symbol, ",SELECT UPDATE FIELDS") {
+					// Respond with field names matching the requested fields
+					fieldNames := "S,CURRENT UPDATE FIELDNAMES,Symbol,Last,Last Size,Last Time,Total Volume,Bid,Bid Size,Ask,Ask Size,High,Low,Open,Close\r\n"
+					if _, err := conn.Write([]byte(fieldNames)); err != nil {
+						logError("Level1: Failed to write field names: %v", err)
+						break
+					}
+					logInfo("Level1: Sent field names response")
+				} else {
+					// Generic system response
+					if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
+						logError("Level1: Failed to write system response: %v", err)
+						break
+					}
 				}
 			}
 		}
@@ -362,7 +394,8 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 				}
 				watchedMu.RUnlock()
 				for _, symbol := range symbols {
-					update := generateFakeL2Update(symbol)
+					// Use order-based updates (message type 3 = Order Add)
+					update := generateFakeL2Order(symbol, '3')
 					if _, err := conn.Write([]byte(update + "\r\n")); err != nil {
 						logError("Level2: Failed to write update for %s: %v", symbol, err)
 						return
@@ -399,49 +432,65 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 
 		logInfo("Level2: Received: %s", line)
 
-		// Parse L2 commands - support both WPL/RPL format and legacy single-char
+		// Parse L2 commands - support WOR/ROR (orders) and WPL/RPL (price levels)
 		parts := strings.Split(line, ",")
 		var cmd string
 		var symbol string
 
-		if strings.HasPrefix(line, "WPL,") && len(parts) >= 2 {
-			// WPL,SYMBOL[,MaxLevels] format per API spec
+		if strings.HasPrefix(line, "WOR,") && len(parts) >= 2 {
+			// WOR,SYMBOL - Watch Orders (for equities/Nasdaq L2)
+			cmd = "WOR"
+			symbol = strings.ToUpper(parts[1])
+		} else if strings.HasPrefix(line, "ROR,") && len(parts) >= 2 {
+			// ROR,SYMBOL - Remove Order watch
+			cmd = "ROR"
+			symbol = strings.ToUpper(parts[1])
+		} else if strings.HasPrefix(line, "WPL,") && len(parts) >= 2 {
+			// WPL,SYMBOL[,MaxLevels] - Watch Price Levels (for futures)
 			cmd = "WPL"
-			symbol = parts[1]
+			symbol = strings.ToUpper(parts[1])
 		} else if strings.HasPrefix(line, "RPL,") && len(parts) >= 2 {
-			// RPL,SYMBOL format per API spec
+			// RPL,SYMBOL - Remove Price Level watch
 			cmd = "RPL"
-			symbol = parts[1]
+			symbol = strings.ToUpper(parts[1])
 		} else if len(line) > 1 {
 			// Legacy single-char format
 			cmd = string(line[0])
-			symbol = strings.TrimSpace(line[1:])
+			symbol = strings.ToUpper(strings.TrimSpace(line[1:]))
 		}
 
 		switch cmd {
-		case "WPL", "w": // Watch price levels
+		case "WOR", "WPL", "w": // Watch orders or price levels
 			watchedMu.Lock()
 			watched[symbol] = true
 			watchedMu.Unlock()
-			logInfo("Level2: Watching %s", symbol)
+			logInfo("Level2: Watching %s (cmd=%s)", symbol, cmd)
 
-			// Send initial book snapshot using message type 7 (Price Level Summary)
-			// Format per API spec: 7,Symbol,Side,Price,Size,OrderCount,Time,Date
-			timeStr := time.Now().Format("15:04:05")
-			dateStr := time.Now().Format("2006-01-02")
+			// Send initial book snapshot using order format (message type 6 = Order Summary)
+			// Format: 6,Symbol,OrderID,MMID,Side,Price,Size,Priority,Precision,Time,Date
+			// For equities, OrderID is empty and MMID contains market maker ID
 			writeErr := false
+			mmids := []string{"NSDQ", "ARCA", "BATS", "EDGX", "NYSE"}
 			for i := 0; i < 5 && !writeErr; i++ {
 				bidPrice := 99.90 - float64(i)*0.01
 				askPrice := 100.00 + float64(i)*0.01
 				size := 100 * (1 + rand.Intn(10))
-				orderCount := 1 + rand.Intn(5)
+				mmid := mmids[i%len(mmids)]
+				priority := i
+				precision := 4
+				timeStr := time.Now().Format("15:04:05.000")
+				dateStr := time.Now().Format("2006-01-02")
 
-				if _, err := conn.Write([]byte(fmt.Sprintf("7,%s,B,%.4f,%d,%d,%s,%s\r\n", symbol, bidPrice, size, orderCount, timeStr, dateStr))); err != nil {
+				// Bid order summary
+				if _, err := conn.Write([]byte(fmt.Sprintf("6,%s,,%s,B,%.4f,%d,%d,%d,%s,%s\r\n",
+					symbol, mmid, bidPrice, size, priority, precision, timeStr, dateStr))); err != nil {
 					logError("Level2: Failed to write BID snapshot for %s: %v", symbol, err)
 					writeErr = true
 					break
 				}
-				if _, err := conn.Write([]byte(fmt.Sprintf("7,%s,A,%.4f,%d,%d,%s,%s\r\n", symbol, askPrice, size, orderCount, timeStr, dateStr))); err != nil {
+				// Ask order summary
+				if _, err := conn.Write([]byte(fmt.Sprintf("6,%s,,%s,A,%.4f,%d,%d,%d,%s,%s\r\n",
+					symbol, mmid, askPrice, size, priority, precision, timeStr, dateStr))); err != nil {
 					logError("Level2: Failed to write ASK snapshot for %s: %v", symbol, err)
 					writeErr = true
 					break
@@ -451,16 +500,28 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 				break
 			}
 
-		case "RPL", "r": // Unwatch price levels
+		case "ROR", "RPL", "r": // Unwatch orders or price levels
 			watchedMu.Lock()
 			delete(watched, symbol)
 			watchedMu.Unlock()
 			logInfo("Level2: Unwatching %s", symbol)
 
-		case "S": // System
-			if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
-				logError("Level2: Failed to write system response: %v", err)
-				break
+		case "S": // System command
+			if strings.HasPrefix(line, "S,SET PROTOCOL") {
+				// Send protocol confirmation followed by server connected
+				if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
+					logError("Level2: Failed to write protocol response: %v", err)
+					break
+				}
+				if _, err := conn.Write([]byte("S,SERVER CONNECTED\r\n")); err != nil {
+					logError("Level2: Failed to write server connected: %v", err)
+					break
+				}
+			} else {
+				if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
+					logError("Level2: Failed to write system response: %v", err)
+					break
+				}
 			}
 		}
 	}
