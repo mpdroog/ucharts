@@ -645,24 +645,34 @@ void TradeZeroWebSocket::parse_order_update(const std::string& json_str) {
     try {
         auto j = json::parse(json_str);
 
+        // Per API spec (tradezero-websocket.txt), order data is nested in "order" object
+        // Format: {"ts": ..., "accountId": ..., "action": "update", "subscription": "Order", "order": {...}}
+        json order_json;
+        if (j.contains("order") && j["order"].is_object()) {
+            order_json = j["order"];
+        } else {
+            // Fallback: order fields at top level (for backwards compatibility)
+            order_json = j;
+        }
+
         TZOrderUpdate order;
 
-        // Parse all order fields
-        if (j.contains("accountId")) safe_strcpy(order.account_id, j["accountId"].get<std::string>().c_str(), sizeof(order.account_id));
-        if (j.contains("clientOrderId")) safe_strcpy(order.client_order_id, j["clientOrderId"].get<std::string>().c_str(), sizeof(order.client_order_id));
-        if (j.contains("symbol")) safe_strcpy(order.symbol, j["symbol"].get<std::string>().c_str(), sizeof(order.symbol));
-        if (j.contains("side")) safe_strcpy(order.side, j["side"].get<std::string>().c_str(), sizeof(order.side));
-        if (j.contains("orderStatus")) safe_strcpy(order.order_status, j["orderStatus"].get<std::string>().c_str(), sizeof(order.order_status));
-        if (j.contains("orderType")) safe_strcpy(order.order_type, j["orderType"].get<std::string>().c_str(), sizeof(order.order_type));
-        if (j.contains("orderQuantity")) order.order_quantity = j["orderQuantity"];
-        if (j.contains("executed")) order.executed = j["executed"];
-        if (j.contains("leavesQuantity")) order.leaves_quantity = j["leavesQuantity"];
-        if (j.contains("limitPrice")) order.limit_price = j["limitPrice"];
-        if (j.contains("priceAvg")) order.price_avg = j["priceAvg"];
-        if (j.contains("lastPrice")) order.last_price = j["lastPrice"];
-        if (j.contains("lastQuantity")) order.last_quantity = j["lastQuantity"];
-        if (j.contains("startTime")) safe_strcpy(order.start_time, j["startTime"].get<std::string>().c_str(), sizeof(order.start_time));
-        if (j.contains("lastUpdated")) safe_strcpy(order.last_updated, j["lastUpdated"].get<std::string>().c_str(), sizeof(order.last_updated));
+        // Parse all order fields from the order object
+        if (order_json.contains("accountId")) safe_strcpy(order.account_id, order_json["accountId"].get<std::string>().c_str(), sizeof(order.account_id));
+        if (order_json.contains("clientOrderId")) safe_strcpy(order.client_order_id, order_json["clientOrderId"].get<std::string>().c_str(), sizeof(order.client_order_id));
+        if (order_json.contains("symbol")) safe_strcpy(order.symbol, order_json["symbol"].get<std::string>().c_str(), sizeof(order.symbol));
+        if (order_json.contains("side")) safe_strcpy(order.side, order_json["side"].get<std::string>().c_str(), sizeof(order.side));
+        if (order_json.contains("orderStatus")) safe_strcpy(order.order_status, order_json["orderStatus"].get<std::string>().c_str(), sizeof(order.order_status));
+        if (order_json.contains("orderType")) safe_strcpy(order.order_type, order_json["orderType"].get<std::string>().c_str(), sizeof(order.order_type));
+        if (order_json.contains("orderQuantity")) order.order_quantity = order_json["orderQuantity"];
+        if (order_json.contains("executed")) order.executed = order_json["executed"];
+        if (order_json.contains("leavesQuantity")) order.leaves_quantity = order_json["leavesQuantity"];
+        if (order_json.contains("limitPrice")) order.limit_price = order_json["limitPrice"];
+        if (order_json.contains("priceAvg")) order.price_avg = order_json["priceAvg"];
+        if (order_json.contains("lastPrice")) order.last_price = order_json["lastPrice"];
+        if (order_json.contains("lastQuantity")) order.last_quantity = order_json["lastQuantity"];
+        if (order_json.contains("startTime")) safe_strcpy(order.start_time, order_json["startTime"].get<std::string>().c_str(), sizeof(order.start_time));
+        if (order_json.contains("lastUpdated")) safe_strcpy(order.last_updated, order_json["lastUpdated"].get<std::string>().c_str(), sizeof(order.last_updated));
 
         LOG_I("tradezero_ws", "Order update: %s %s qty=%d status=%s",
               order.symbol, order.side, order.order_quantity, order.order_status);
@@ -685,20 +695,30 @@ void TradeZeroWebSocket::parse_position_update(const std::string& json_str) {
     try {
         auto j = json::parse(json_str);
 
+        // Per API spec (tradezero-websocket.txt), position data is nested in "position" object
+        // Format: {"ts": ..., "accountId": ..., "action": "update", "subscription": "Position", "position": {...}}
+        json pos_json;
+        if (j.contains("position") && j["position"].is_object()) {
+            pos_json = j["position"];
+        } else {
+            // Fallback: position fields at top level (for backwards compatibility)
+            pos_json = j;
+        }
+
         TZPositionUpdate position;
 
-        // Parse position fields
-        if (j.contains("id")) safe_strcpy(position.id, j["id"].get<std::string>().c_str(), sizeof(position.id));
-        if (j.contains("accountId")) safe_strcpy(position.account_id, j["accountId"].get<std::string>().c_str(), sizeof(position.account_id));
-        if (j.contains("symbol")) safe_strcpy(position.symbol, j["symbol"].get<std::string>().c_str(), sizeof(position.symbol));
-        if (j.contains("shares")) position.shares = j["shares"].get<float>();
-        if (j.contains("side")) safe_strcpy(position.side, j["side"].get<std::string>().c_str(), sizeof(position.side));
-        if (j.contains("priceAvg")) position.price_avg = j["priceAvg"].get<float>();
-        if (j.contains("priceOpen")) position.price_open = j["priceOpen"].get<float>();
-        if (j.contains("priceClose")) position.price_close = j["priceClose"].get<float>();
-        if (j.contains("dayOvernight")) safe_strcpy(position.day_overnight, j["dayOvernight"].get<std::string>().c_str(), sizeof(position.day_overnight));
-        if (j.contains("createdDate")) safe_strcpy(position.created_date, j["createdDate"].get<std::string>().c_str(), sizeof(position.created_date));
-        if (j.contains("updatedDate")) safe_strcpy(position.updated_date, j["updatedDate"].get<std::string>().c_str(), sizeof(position.updated_date));
+        // Parse position fields from the position object
+        if (pos_json.contains("id")) safe_strcpy(position.id, pos_json["id"].get<std::string>().c_str(), sizeof(position.id));
+        if (pos_json.contains("accountId")) safe_strcpy(position.account_id, pos_json["accountId"].get<std::string>().c_str(), sizeof(position.account_id));
+        if (pos_json.contains("symbol")) safe_strcpy(position.symbol, pos_json["symbol"].get<std::string>().c_str(), sizeof(position.symbol));
+        if (pos_json.contains("shares")) position.shares = pos_json["shares"].get<float>();
+        if (pos_json.contains("side")) safe_strcpy(position.side, pos_json["side"].get<std::string>().c_str(), sizeof(position.side));
+        if (pos_json.contains("priceAvg")) position.price_avg = pos_json["priceAvg"].get<float>();
+        if (pos_json.contains("priceOpen")) position.price_open = pos_json["priceOpen"].get<float>();
+        if (pos_json.contains("priceClose")) position.price_close = pos_json["priceClose"].get<float>();
+        if (pos_json.contains("dayOvernight")) safe_strcpy(position.day_overnight, pos_json["dayOvernight"].get<std::string>().c_str(), sizeof(position.day_overnight));
+        if (pos_json.contains("createdDate")) safe_strcpy(position.created_date, pos_json["createdDate"].get<std::string>().c_str(), sizeof(position.created_date));
+        if (pos_json.contains("updatedDate")) safe_strcpy(position.updated_date, pos_json["updatedDate"].get<std::string>().c_str(), sizeof(position.updated_date));
 
         LOG_I("tradezero_ws", "Position update: %s shares=%.0f avg_price=%.2f",
               position.symbol, static_cast<double>(position.shares), static_cast<double>(position.price_avg));

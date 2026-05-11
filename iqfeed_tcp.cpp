@@ -621,11 +621,14 @@ bool IQFeedLevel1::watch(const char* symbol) {
 }
 
 bool IQFeedLevel1::unwatch(const char* symbol) EXCLUDES(m_mutex) {
-    char cmd[32];
-    std::snprintf(cmd, sizeof(cmd), "r%s\r\n", symbol);
+    // Per API spec (level1.txt), symbols must be uppercase
+    char upper_symbol[32];
+    to_uppercase(upper_symbol, symbol, sizeof(upper_symbol));
+    char cmd[48];
+    std::snprintf(cmd, sizeof(cmd), "r%s\r\n", upper_symbol);
 
     MutexLock lock(m_mutex);
-    m_quotes.erase(symbol);
+    m_quotes.erase(upper_symbol);
 
     return send_command(cmd);
 }
@@ -932,11 +935,14 @@ bool IQFeedLevel2::watch(const char* symbol, int max_levels) {
 }
 
 bool IQFeedLevel2::unwatch(const char* symbol) EXCLUDES(m_mutex) {
+    // Per API spec (l2.txt), symbols must be uppercase
+    char upper_symbol[32];
+    to_uppercase(upper_symbol, symbol, sizeof(upper_symbol));
     char cmd[64];
-    std::snprintf(cmd, sizeof(cmd), "RPL,%s\r\n", symbol);
+    std::snprintf(cmd, sizeof(cmd), "RPL,%s\r\n", upper_symbol);
 
     MutexLock lock(m_mutex);
-    m_books.erase(symbol);
+    m_books.erase(upper_symbol);
 
     return send_command(cmd);
 }

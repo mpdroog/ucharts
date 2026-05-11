@@ -32,6 +32,8 @@ func logError(format string, args ...interface{}) {
 }
 
 // generateFakeCandles generates fake daily candle data
+// Per IQFeed API spec (hist.txt), daily data format is:
+// LH,Date,High,Low,Open,Close,PeriodVolume,OpenInterest
 func generateFakeCandles(symbol string, count int) []string {
 	var lines []string
 	basePrice := 100.0 + rand.Float64()*50.0
@@ -44,7 +46,8 @@ func generateFakeCandles(symbol string, count int) []string {
 		close := low + rand.Float64()*(high-low)
 		volume := int64(10000 + rand.Intn(90000))
 
-		line := fmt.Sprintf("%s,%.2f,%.2f,%.2f,%.2f,%d,0",
+		// LH prefix required per API spec
+		line := fmt.Sprintf("LH,%s,%.2f,%.2f,%.2f,%.2f,%d,0",
 			date.Format("2006-01-02"),
 			high, low, open, close, volume)
 		lines = append(lines, line)
@@ -65,19 +68,25 @@ func generateFakeL1Quote(symbol string) string {
 		symbol, bid, ask, last, volume)
 }
 
-// generateFakeL2Update generates a fake Level 2 order book update
+// generateFakeL2Update generates a fake Level 2 price level update
+// Per IQFeed API spec (l2.txt), price level messages use:
+// 7 = Price Level Summary, 8 = Price Level Update, 9 = Price Level Delete
+// Format: 8,Symbol,Side,Price,Size,OrderCount,Time,Date
 func generateFakeL2Update(symbol string) string {
-	side := "BID"
+	side := "B" // B=Bid, A=Ask per spec
 	if rand.Intn(2) == 1 {
-		side = "ASK"
+		side = "A"
 	}
 
 	price := 99.90 + rand.Float64()*0.20
 	size := 100 * (1 + rand.Intn(10))
-	exchange := "NYSE"
+	orderCount := 1 + rand.Intn(5)
+	timeStr := time.Now().Format("15:04:05")
+	dateStr := time.Now().Format("2006-01-02")
 
-	return fmt.Sprintf("2,%s,%s,%s,%.2f,%d",
-		symbol, side, exchange, price, size)
+	// Use message type 8 for updates
+	return fmt.Sprintf("8,%s,%s,%.4f,%d,%d,%s,%s",
+		symbol, side, price, size, orderCount, timeStr, dateStr)
 }
 
 // handleLookupClient handles a connection to the Lookup port
@@ -166,7 +175,7 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 					close := low + rand.Float64()*(high-low)
 					volume := int64(1000 + rand.Intn(5000))
 
-					line := fmt.Sprintf("%s,%.2f,%.2f,%.2f,%.2f,%d,%d",
+					line := fmt.Sprintf("LH,%s,%.2f,%.2f,%.2f,%.2f,%d,%d",
 						ts.Format("2006-01-02 15:04:05"),
 						high, low, open, close, volume, volume)
 					if _, err := conn.Write([]byte(line + "\r\n")); err != nil {
@@ -199,6 +208,21 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 func handleLevel1Client(conn net.Conn, ctx context.Context) {
 	defer conn.Close()
 	logInfo("Level1: Client connected from %s", conn.RemoteAddr())
+
+	// Per API spec (level1.txt), send initialization messages on connect:
+	// S,KEY, S,SERVER CONNECTED, S,IP, S,CUST
+	initMsgs := []string{
+		"S,KEY,12345\r\n",
+		"S,SERVER CONNECTED\r\n",
+		"S,IP,127.0.0.1 5009\r\n",
+		"S,CUST,TESTUSER,0,0,0,0,0,0,0\r\n",
+	}
+	for _, msg := range initMsgs {
+		if _, err := conn.Write([]byte(msg)); err != nil {
+			logError("Level1: Failed to send init message: %v", err)
+			return
+		}
+	}
 
 	reader := bufio.NewReader(conn)
 
@@ -357,41 +381,59 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 
 		logInfo("Level2: Received: %s", line)
 
-		if len(line) > 1 {
-			cmd := line[0]
-			symbol := strings.TrimSpace(line[1:])
+		// Parse L2 commands - support both WPL/RPL format and legacy single-char
+		parts := strings.Split(line, ",")
+		var cmd string
+		var symbol string
 
-			switch cmd {
-			case 'w': // Watch
-				watchedMu.Lock()
-				watched[symbol] = true
-				watchedMu.Unlock()
-				logInfo("Level2: Watching %s", symbol)
+		if strings.HasPrefix(line, "WPL,") && len(parts) >= 2 {
+			// WPL,SYMBOL[,MaxLevels] format per API spec
+			cmd = "WPL"
+			symbol = parts[1]
+		} else if strings.HasPrefix(line, "RPL,") && len(parts) >= 2 {
+			// RPL,SYMBOL format per API spec
+			cmd = "RPL"
+			symbol = parts[1]
+		} else if len(line) > 1 {
+			// Legacy single-char format
+			cmd = string(line[0])
+			symbol = strings.TrimSpace(line[1:])
+		}
 
-				// Send initial book snapshot
-				for i := 0; i < 5; i++ {
-					bidPrice := 99.90 - float64(i)*0.01
-					askPrice := 100.00 + float64(i)*0.01
-					size := 100 * (1 + rand.Intn(10))
+		switch cmd {
+		case "WPL", "w": // Watch price levels
+			watchedMu.Lock()
+			watched[symbol] = true
+			watchedMu.Unlock()
+			logInfo("Level2: Watching %s", symbol)
 
-					if _, err := conn.Write([]byte(fmt.Sprintf("2,%s,BID,NYSE,%.2f,%d\r\n", symbol, bidPrice, size))); err != nil {
-						logError("Level2: Failed to write BID snapshot for %s: %v", symbol, err)
-					}
-					if _, err := conn.Write([]byte(fmt.Sprintf("2,%s,ASK,NYSE,%.2f,%d\r\n", symbol, askPrice, size))); err != nil {
-						logError("Level2: Failed to write ASK snapshot for %s: %v", symbol, err)
-					}
+			// Send initial book snapshot using message type 7 (Price Level Summary)
+			// Format per API spec: 7,Symbol,Side,Price,Size,OrderCount,Time,Date
+			timeStr := time.Now().Format("15:04:05")
+			dateStr := time.Now().Format("2006-01-02")
+			for i := 0; i < 5; i++ {
+				bidPrice := 99.90 - float64(i)*0.01
+				askPrice := 100.00 + float64(i)*0.01
+				size := 100 * (1 + rand.Intn(10))
+				orderCount := 1 + rand.Intn(5)
+
+				if _, err := conn.Write([]byte(fmt.Sprintf("7,%s,B,%.4f,%d,%d,%s,%s\r\n", symbol, bidPrice, size, orderCount, timeStr, dateStr))); err != nil {
+					logError("Level2: Failed to write BID snapshot for %s: %v", symbol, err)
 				}
-
-			case 'r': // Unwatch
-				watchedMu.Lock()
-				delete(watched, symbol)
-				watchedMu.Unlock()
-				logInfo("Level2: Unwatching %s", symbol)
-
-			case 'S': // System
-				if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
-					logError("Level2: Failed to write system response: %v", err)
+				if _, err := conn.Write([]byte(fmt.Sprintf("7,%s,A,%.4f,%d,%d,%s,%s\r\n", symbol, askPrice, size, orderCount, timeStr, dateStr))); err != nil {
+					logError("Level2: Failed to write ASK snapshot for %s: %v", symbol, err)
 				}
+			}
+
+		case "RPL", "r": // Unwatch price levels
+			watchedMu.Lock()
+			delete(watched, symbol)
+			watchedMu.Unlock()
+			logInfo("Level2: Unwatching %s", symbol)
+
+		case "S": // System
+			if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
+				logError("Level2: Failed to write system response: %v", err)
 			}
 		}
 	}

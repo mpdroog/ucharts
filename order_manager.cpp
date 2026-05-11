@@ -534,7 +534,9 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
         // Parse order status
         if (std::strcmp(update.order_status, "Filled") == 0) {
             new_order.status = OrderStatus::FILLED;
-        } else if (std::strcmp(update.order_status, "Cancelled") == 0) {
+        } else if (std::strcmp(update.order_status, "Canceled") == 0 ||
+                   std::strcmp(update.order_status, "Cancelled") == 0) {
+            // Accept both American (Canceled) and British (Cancelled) spelling
             new_order.status = OrderStatus::CANCELLED;
         } else if (update.executed > 0 && update.executed < update.order_quantity) {
             new_order.status = OrderStatus::PARTIAL;
@@ -556,7 +558,9 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
         // Parse order status
         if (std::strcmp(update.order_status, "Filled") == 0) {
             order->status = OrderStatus::FILLED;
-        } else if (std::strcmp(update.order_status, "Cancelled") == 0) {
+        } else if (std::strcmp(update.order_status, "Canceled") == 0 ||
+                   std::strcmp(update.order_status, "Cancelled") == 0) {
+            // Accept both American (Canceled) and British (Cancelled) spelling
             order->status = OrderStatus::CANCELLED;
         } else if (update.executed > 0 && update.executed < update.order_quantity) {
             order->status = OrderStatus::PARTIAL;

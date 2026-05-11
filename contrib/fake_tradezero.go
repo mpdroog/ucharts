@@ -68,7 +68,8 @@ func logError(format string, args ...interface{}) {
 func handlePositions(w http.ResponseWriter, r *http.Request) {
 	logInfo("REST: GET %s", r.URL.Path)
 	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write([]byte(`{"positions":[]}`)); err != nil {
+	// API returns array directly, not wrapped in object
+	if _, err := w.Write([]byte(`[]`)); err != nil {
 		logError("REST: Failed to write positions response: %v", err)
 	}
 }
@@ -78,8 +79,9 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 	ordersMu.RLock()
 	defer ordersMu.RUnlock()
 
-	resp := map[string]interface{}{"orders": orders}
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	w.Header().Set("Content-Type", "application/json")
+	// API returns array directly, not wrapped in object
+	if err := json.NewEncoder(w).Encode(orders); err != nil {
 		logError("REST: Failed to encode orders response: %v", err)
 	}
 }
@@ -133,10 +135,19 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	go simulateFill(orderID, req.Side, req.LimitPrice, req.Quantity)
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":       true,
-		"clientOrderId": orderID,
-	}); err != nil {
+	// Return full order object per API spec (tradezero-order.txt lines 99-111)
+	resp := map[string]interface{}{
+		"clientOrderId":  orderID,
+		"symbol":         req.Symbol,
+		"side":           req.Side,
+		"orderType":      req.OrderType,
+		"quantity":       req.Quantity,
+		"filledQuantity": 0,
+		"averagePrice":   0.0,
+		"orderStatus":    "new",
+		"timestamp":      time.Now().Format(time.RFC3339),
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		logError("REST: Failed to encode place order response: %v", err)
 	}
 }
@@ -197,7 +208,7 @@ func handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	for i := range orders {
 		logInfo("REST: Checking order %s vs %s", orders[i].ClientOrderID, orderID)
 		if orders[i].ClientOrderID == orderID {
-			orders[i].OrderStatus = "Cancelled"
+			orders[i].OrderStatus = "Canceled"
 			cancelledOrder = &orders[i]
 			logInfo("REST: Found and cancelled order %s", orderID)
 			break
@@ -217,8 +228,8 @@ func handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 			// Find first matching pending order
 			for i := range orders {
 				if orders[i].Symbol == symbol && orders[i].Side == side &&
-					orders[i].OrderStatus != "Cancelled" && orders[i].OrderStatus != "Filled" {
-					orders[i].OrderStatus = "Cancelled"
+					orders[i].OrderStatus != "Canceled" && orders[i].OrderStatus != "Filled" {
+					orders[i].OrderStatus = "Canceled"
 					orders[i].ClientOrderID = orderID // Update to client's ID
 					cancelledOrder = &orders[i]
 					logInfo("REST: Matched order by symbol/side: %s %s", symbol, side)
@@ -250,8 +261,8 @@ func handleCancelAllOrders(w http.ResponseWriter, r *http.Request) {
 
 	ordersMu.Lock()
 	for i := range orders {
-		if orders[i].OrderStatus != "Cancelled" && orders[i].OrderStatus != "Filled" {
-			orders[i].OrderStatus = "Cancelled"
+		if orders[i].OrderStatus != "Canceled" && orders[i].OrderStatus != "Filled" {
+			orders[i].OrderStatus = "Canceled"
 			broadcastEvent(orders[i])
 		}
 	}
@@ -286,16 +297,40 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 }
 
 // broadcastEvent sends an order event to all connected WebSocket clients
+// Matches real TradeZero API format from docs/tradezero-websocket.txt
 func broadcastEvent(order MockOrder) {
+	// Order data is nested inside "order" object per API spec
+	orderData := map[string]interface{}{
+		"accountId":       "test_account",
+		"clientOrderId":   order.ClientOrderID,
+		"symbol":          order.Symbol,
+		"tradedSymbol":    order.Symbol,
+		"side":            order.Side,
+		"orderStatus":     order.OrderStatus,
+		"orderType":       "Limit",
+		"orderQuantity":   order.OrderQuantity,
+		"executed":        order.Executed,
+		"leavesQuantity":  order.OrderQuantity - order.Executed,
+		"canceledQuantity": 0,
+		"limitPrice":      order.LimitPrice,
+		"priceAvg":        order.PriceAvg,
+		"priceStop":       0.0,
+		"lastPrice":       order.PriceAvg,
+		"lastQuantity":    order.Executed,
+		"route":           "SIM",
+		"securityType":    "Stock",
+		"timeInForce":     "Day",
+		"openClose":       "Open",
+		"startTime":       time.Now().Format(time.RFC3339),
+		"lastUpdated":     time.Now().Format(time.RFC3339),
+	}
+
 	event := map[string]interface{}{
-		"subscription":  "Order",
-		"clientOrderId": order.ClientOrderID,
-		"symbol":        order.Symbol,
-		"side":          order.Side,
-		"orderStatus":   order.OrderStatus,
-		"orderQuantity": order.OrderQuantity,
-		"executed":      order.Executed,
-		"limitPrice":    order.LimitPrice,
+		"ts":           time.Now().UnixMilli(),
+		"accountId":    "test_account",
+		"action":       "update",
+		"subscription": "Order",
+		"order":        orderData,
 	}
 
 	wsConnsMu.RLock()
