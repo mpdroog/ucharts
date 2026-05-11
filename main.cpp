@@ -745,6 +745,9 @@ int main(int argc, char** argv) {
             prev_trendlines_count[i] = tcount;
         }
 
+        // Pull latest L1/L2 data from IQFeed streams into SymbolData
+        get_market_data().update_from_streams();
+
         // Update charts for selected ticker
         update_charts_for_selected_ticker();
 

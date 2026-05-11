@@ -610,7 +610,7 @@ bool IQFeedLevel1::set_protocol() {
     while (attempts < 10 && read_line(m_socket, line, 2000)) {
         if (line.find("CURRENT PROTOCOL") != std::string::npos ||
             line.find("SERVER CONNECTED") != std::string::npos) {
-            return true;
+            break;
         }
         // S,KEY, S,IP, S,CUST are normal IQFeed init messages - not warnings
         if (line.find("S,KEY") == std::string::npos &&
@@ -621,8 +621,94 @@ bool IQFeedLevel1::set_protocol() {
         attempts++;
     }
 
-    std::snprintf(m_error, sizeof(m_error), "Protocol setup failed");
+    if (attempts >= 10) {
+        std::snprintf(m_error, sizeof(m_error), "Protocol setup failed - no confirmation");
+        return false;
+    }
+
+    // Request specific fields in order matching our parser:
+    // Symbol (always first, implicit), Last, Last Size, Last Time, Total Volume,
+    // Bid, Bid Size, Ask, Ask Size, High, Low, Open, Close
+    if (!send_command("S,SELECT UPDATE FIELDS,Last,Last Size,Last Time,Total Volume,Bid,Bid Size,Ask,Ask Size,High,Low,Open,Close\r\n")) {
+        return false;
+    }
+
+    // Read field selection confirmation (required per API docs)
+    attempts = 0;
+    while (attempts < 5 && read_line(m_socket, line, 2000)) {
+        if (line.find("CURRENT UPDATE FIELDNAMES") != std::string::npos) {
+            LOG_I("iqfeed", "L1 fields: %s", line.c_str());
+            parse_field_names(line);
+            return true;
+        }
+        attempts++;
+    }
+
+    std::snprintf(m_error, sizeof(m_error), "Field selection failed - no confirmation");
     return false;
+}
+
+void IQFeedLevel1::parse_field_names(const std::string& line) {
+    // Format: S,CURRENT UPDATE FIELDNAMES,Symbol,Field1,Field2,...
+    // Symbol is always index 0, other fields start at index 1
+
+    // Reset all indices
+    m_idx_last = m_idx_last_size = m_idx_last_time = m_idx_total_vol = -1;
+    m_idx_bid = m_idx_bid_size = m_idx_ask = m_idx_ask_size = -1;
+    m_idx_open = m_idx_high = m_idx_low = m_idx_close = -1;
+
+    // Skip "S,CURRENT UPDATE FIELDNAMES,"
+    const char* p = line.c_str();
+    const char* start = std::strstr(p, "FIELDNAMES,");
+    if (start == nullptr) return;
+    start += 11;  // Skip "FIELDNAMES,"
+
+    // Parse comma-separated field names
+    int index = 0;  // Symbol is index 0
+    char field[64];
+
+    while (*start != '\0') {
+        // Extract field name
+        int i = 0;
+        while (*start != ',' && *start != '\0' && i < 63) {
+            field[i++] = *start++;
+        }
+        field[i] = '\0';
+        if (*start == ',') start++;
+
+        // Map field name to index (Symbol is 0, first data field is 1)
+        if (std::strcmp(field, "Last") == 0 || std::strcmp(field, "Most Recent Trade") == 0) {
+            m_idx_last = index;
+        } else if (std::strcmp(field, "Last Size") == 0 || std::strcmp(field, "Most Recent Trade Size") == 0) {
+            m_idx_last_size = index;
+        } else if (std::strcmp(field, "Last Time") == 0 || std::strcmp(field, "Most Recent Trade Time") == 0) {
+            m_idx_last_time = index;
+        } else if (std::strcmp(field, "Total Volume") == 0) {
+            m_idx_total_vol = index;
+        } else if (std::strcmp(field, "Bid") == 0) {
+            m_idx_bid = index;
+        } else if (std::strcmp(field, "Bid Size") == 0) {
+            m_idx_bid_size = index;
+        } else if (std::strcmp(field, "Ask") == 0) {
+            m_idx_ask = index;
+        } else if (std::strcmp(field, "Ask Size") == 0) {
+            m_idx_ask_size = index;
+        } else if (std::strcmp(field, "Open") == 0) {
+            m_idx_open = index;
+        } else if (std::strcmp(field, "High") == 0) {
+            m_idx_high = index;
+        } else if (std::strcmp(field, "Low") == 0) {
+            m_idx_low = index;
+        } else if (std::strcmp(field, "Close") == 0) {
+            m_idx_close = index;
+        }
+
+        index++;
+    }
+
+    LOG_D("iqfeed", "L1 field indices: last=%d size=%d time=%d vol=%d bid=%d ask=%d open=%d high=%d low=%d close=%d",
+          m_idx_last, m_idx_last_size, m_idx_last_time, m_idx_total_vol,
+          m_idx_bid, m_idx_ask, m_idx_open, m_idx_high, m_idx_low, m_idx_close);
 }
 
 bool IQFeedLevel1::send_command(const char* cmd) {
@@ -663,8 +749,11 @@ void IQFeedLevel1::set_callback(L1Callback callback) EXCLUDES(m_mutex) {
 }
 
 bool IQFeedLevel1::get_quote(const char* symbol, L1Quote& quote) EXCLUDES(m_mutex) {
+    char upper_symbol[32];
+    to_uppercase(upper_symbol, symbol, sizeof(upper_symbol));
+
     MutexLock lock(m_mutex);
-    auto it = m_quotes.find(symbol);
+    auto it = m_quotes.find(upper_symbol);
     if (it == m_quotes.end()) {
         return false;
     }
@@ -742,7 +831,10 @@ void IQFeedLevel1::parse_l1_message(const std::string& line) {
     if (line.empty()) return;
 
     char msg_type = line[0];
-    if (line.size() < 3 || line[1] != ',') return;
+    if (line.size() < 3 || line[1] != ',') {
+        LOG_D("iqfeed", "L1: Malformed message (no comma): %s", line.c_str());
+        return;
+    }
 
     const char* data = line.c_str() + 2;
 
@@ -758,67 +850,83 @@ void IQFeedLevel1::parse_l1_message(const std::string& line) {
         case 'F':  // Fundamental - ignore for now
             break;
         default:
+            LOG_D("iqfeed", "L1: Unknown message type '%c': %.60s", msg_type, line.c_str());
             break;
     }
 }
 
 void IQFeedLevel1::parse_summary_message(const char* data) EXCLUDES(m_mutex) {
-    // Format: SYMBOL,FIELD1,FIELD2,...
-    // Default fields (protocol 6.2): Symbol,Exchange ID,Last,Change,Percent Change,
-    // Total Volume,Incremental Volume,High,Low,Bid,Ask,Bid Size,Ask Size,Tick,
-    // Bid Tick,Range,Last Trade Time,Open Interest,Open,Close,...
+    // Parse fields dynamically based on indices from S,CURRENT UPDATE FIELDNAMES
+    // Split data into fields by comma
+    std::vector<std::string> fields;
+    const char* p = data;
+    const char* field_start = p;
 
-    char symbol[16] = "";
-    char exchange[8] = "";
-    float last = 0, change = 0, pct_change = 0;
-    int64_t total_vol = 0, inc_vol = 0;
-    float high = 0, low = 0, bid = 0, ask = 0;
-    int bid_size = 0, ask_size = 0;
-    char tick[4] = "";
-    char bid_tick[4] = "";
-    float range = 0;
-    char last_time[16] = "";
-    int open_interest = 0;
-    float open = 0, close_price = 0;
-
-    int parsed = std::sscanf(data, "%15[^,],%7[^,],%f,%f,%f,%lld,%lld,%f,%f,%f,%f,%d,%d,%3[^,],%3[^,],%f,%15[^,],%d,%f,%f",
-                            symbol, exchange, &last, &change, &pct_change,
-                            &total_vol, &inc_vol, &high, &low, &bid, &ask,
-                            &bid_size, &ask_size, tick, bid_tick, &range,
-                            last_time, &open_interest, &open, &close_price);
-
-    if (parsed >= 11 && symbol[0] != '\0') {
-        L1Quote quote_copy;
-        L1Callback callback_copy;
-
-        {
-            MutexLock lock(m_mutex);
-            L1Quote& quote = m_quotes[symbol];
-            safe_strcpy(quote.symbol, symbol, sizeof(quote.symbol));
-            quote.last = last;
-            quote.high = high;
-            quote.low = low;
-            quote.bid = bid;
-            quote.ask = ask;
-            quote.bid_size = bid_size;
-            quote.ask_size = ask_size;
-            quote.volume = total_vol;
-            if (parsed >= 19) {
-                quote.open = open;
-            }
-            if (parsed >= 20) {
-                quote.close = close_price;
-            }
-            if (last_time[0] != '\0') {
-                safe_strcpy(quote.last_time, last_time, sizeof(quote.last_time));
-            }
-            quote_copy = quote;
-            callback_copy = m_callback;
+    while (*p != '\0') {
+        if (*p == ',') {
+            fields.emplace_back(field_start, static_cast<size_t>(p - field_start));
+            field_start = p + 1;
         }
+        p++;
+    }
+    // Don't forget the last field
+    if (field_start < p) {
+        fields.emplace_back(field_start, static_cast<size_t>(p - field_start));
+    }
 
-        if (callback_copy) {
-            callback_copy(quote_copy);
+    if (fields.empty()) return;
+
+    // Symbol is always field 0
+    const std::string& symbol = fields[0];
+    if (symbol.empty()) return;
+
+    // Helper to safely get field value
+    auto get_field = [&fields](int idx) -> const char* {
+        if (idx < 0 || idx >= static_cast<int>(fields.size())) return "";
+        return fields[static_cast<size_t>(idx)].c_str();
+    };
+
+    // Parse values using field indices
+    float last = (m_idx_last >= 0) ? static_cast<float>(std::atof(get_field(m_idx_last))) : 0;
+    int last_size = (m_idx_last_size >= 0) ? std::atoi(get_field(m_idx_last_size)) : 0;
+    const char* last_time = (m_idx_last_time >= 0) ? get_field(m_idx_last_time) : "";
+    int64_t total_vol = (m_idx_total_vol >= 0) ? std::atoll(get_field(m_idx_total_vol)) : 0;
+    float bid = (m_idx_bid >= 0) ? static_cast<float>(std::atof(get_field(m_idx_bid))) : 0;
+    int bid_size = (m_idx_bid_size >= 0) ? std::atoi(get_field(m_idx_bid_size)) : 0;
+    float ask = (m_idx_ask >= 0) ? static_cast<float>(std::atof(get_field(m_idx_ask))) : 0;
+    int ask_size = (m_idx_ask_size >= 0) ? std::atoi(get_field(m_idx_ask_size)) : 0;
+    float open = (m_idx_open >= 0) ? static_cast<float>(std::atof(get_field(m_idx_open))) : 0;
+    float high = (m_idx_high >= 0) ? static_cast<float>(std::atof(get_field(m_idx_high))) : 0;
+    float low = (m_idx_low >= 0) ? static_cast<float>(std::atof(get_field(m_idx_low))) : 0;
+    float close_price = (m_idx_close >= 0) ? static_cast<float>(std::atof(get_field(m_idx_close))) : 0;
+
+    L1Quote quote_copy;
+    L1Callback callback_copy;
+
+    {
+        MutexLock lock(m_mutex);
+        L1Quote& quote = m_quotes[symbol];
+        safe_strcpy(quote.symbol, symbol.c_str(), sizeof(quote.symbol));
+        quote.last = last;
+        quote.last_size = last_size;
+        quote.high = high;
+        quote.low = low;
+        quote.open = open;
+        quote.close = close_price;
+        quote.bid = bid;
+        quote.ask = ask;
+        quote.bid_size = bid_size;
+        quote.ask_size = ask_size;
+        quote.volume = total_vol;
+        if (last_time[0] != '\0') {
+            safe_strcpy(quote.last_time, last_time, sizeof(quote.last_time));
         }
+        quote_copy = quote;
+        callback_copy = m_callback;
+    }
+
+    if (callback_copy) {
+        callback_copy(quote_copy);
     }
 }
 
@@ -832,7 +940,8 @@ void IQFeedLevel1::parse_update_message(const char* data) EXCLUDES(m_mutex) {
 // IQFeedLevel2 Implementation
 // ============================================================================
 
-IQFeedLevel2::IQFeedLevel2() : m_socket(-1), m_running(false), m_port(0) {
+IQFeedLevel2::IQFeedLevel2() : m_socket(-1), m_running(false), m_unavailable(false),
+                               m_not_found_count(0), m_valid_data_count(0), m_port(0) {
     m_error[0] = '\0';
     m_host[0] = '\0';
 }
@@ -842,6 +951,13 @@ IQFeedLevel2::~IQFeedLevel2() {
 }
 
 bool IQFeedLevel2::connect(const char* host, int port) {
+    // Don't connect if L2 was determined to be unavailable (no subscription)
+    if (m_unavailable) {
+        std::snprintf(m_error, sizeof(m_error), "L2 unavailable (no subscription)");
+        LOG_I("iqfeed", "L2 connect skipped - marked as unavailable");
+        return false;
+    }
+
     if (m_socket >= 0) {
         disconnect();
     }
@@ -849,6 +965,10 @@ bool IQFeedLevel2::connect(const char* host, int port) {
     // Store for reconnection
     safe_strcpy(m_host, host, sizeof(m_host));
     m_port = port;
+
+    // Reset counters for fresh connection
+    m_not_found_count = 0;
+    m_valid_data_count = 0;
 
     m_socket = connect_tcp(host, port, m_error, sizeof(m_error));
     if (m_socket < 0) {
@@ -868,6 +988,12 @@ bool IQFeedLevel2::connect(const char* host, int port) {
 }
 
 bool IQFeedLevel2::reconnect() {
+    // Don't reconnect if L2 was determined to be unavailable
+    if (m_unavailable) {
+        LOG_I("iqfeed", "L2 reconnect skipped - marked as unavailable (no subscription)");
+        return false;
+    }
+
     // Close existing socket
     if (m_socket >= 0) {
         close(m_socket);
@@ -932,23 +1058,67 @@ const char* IQFeedLevel2::last_error() const {
 }
 
 bool IQFeedLevel2::set_protocol() {
+    // Expected responses from IQFeed L2:
+    // - "S,CURRENT PROTOCOL,6.2," after SET PROTOCOL command
+    // - "S,SERVER CONNECTED" when depth server is ready
+    // - "S,SERVER DISCONNECTED" if depth server not available
+    // - "T,..." timestamp messages (ignorable)
+
+    LOG_I("iqfeed", "L2 set_protocol: sending S,SET PROTOCOL,6.2");
     if (!send_command("S,SET PROTOCOL,6.2\r\n")) {
         return false;
     }
 
-    // Read until we see protocol confirmation or server connected
     std::string line;
+    bool got_protocol = false;
     int attempts = 0;
+
     while (attempts < 10 && read_line(m_socket, line, 2000)) {
-        if (line.find("CURRENT PROTOCOL") != std::string::npos ||
-            line.find("SERVER CONNECTED") != std::string::npos) {
-            return true;
-        }
-        LOG_W("iqfeed", "L2: Unexpected protocol response[%d]: %s", attempts, line.c_str());
         attempts++;
+
+        // Check for expected responses
+        if (line.find("S,CURRENT PROTOCOL") != std::string::npos) {
+            LOG_I("iqfeed", "L2 protocol confirmed: %s", line.c_str());
+            got_protocol = true;
+            continue;  // Keep reading to drain any buffered messages
+        }
+
+        if (line.find("S,SERVER CONNECTED") != std::string::npos) {
+            LOG_I("iqfeed", "L2 server connected: %s", line.c_str());
+            return got_protocol || true;  // Success
+        }
+
+        if (line.find("S,SERVER DISCONNECTED") != std::string::npos) {
+            LOG_W("iqfeed", "L2 server disconnected: %s", line.c_str());
+            continue;  // May get CONNECTED after
+        }
+
+        if (line[0] == 'T') {
+            // Timestamp message - ignore
+            continue;
+        }
+
+        // Unexpected response - warn with details
+        char hex_dump[128] = "";
+        size_t hex_len = 0;
+        for (size_t i = 0; i < line.size() && i < 20 && hex_len < sizeof(hex_dump) - 4; i++) {
+            hex_len += static_cast<size_t>(std::snprintf(hex_dump + hex_len, sizeof(hex_dump) - hex_len,
+                                                          "%02X ", static_cast<unsigned char>(line[i])));
+        }
+        LOG_W("iqfeed", "L2 set_protocol: unexpected response[%d] len=%zu: '%s' hex=[%s]",
+              attempts, line.size(), line.c_str(), hex_dump);
+
+        if (got_protocol) {
+            return true;  // We got protocol, this extra message is odd but OK
+        }
     }
 
-    std::snprintf(m_error, sizeof(m_error), "Protocol setup failed");
+    if (got_protocol) {
+        return true;
+    }
+
+    std::snprintf(m_error, sizeof(m_error), "L2 protocol setup failed - no valid response");
+    LOG_E("iqfeed", "%s", m_error);
     return false;
 }
 
@@ -964,11 +1134,14 @@ bool IQFeedLevel2::send_command(const char* cmd) {
 }
 
 bool IQFeedLevel2::watch(const char* symbol, int max_levels) {
+    (void)max_levels;  // WOR doesn't support max_levels parameter
     char upper_symbol[32];
     to_uppercase(upper_symbol, symbol, sizeof(upper_symbol));
-    // WPL - Watch Price Levels
+    // WOR - Watch Orders (required for equity Level 2 / Nasdaq market makers)
+    // Note: WPL (Watch Price Levels) does NOT work for equities, only for futures
     char cmd[64];
-    std::snprintf(cmd, sizeof(cmd), "WPL,%s,%d\r\n", upper_symbol, max_levels);
+    std::snprintf(cmd, sizeof(cmd), "WOR,%s\r\n", upper_symbol);
+    LOG_I("iqfeed", "L2 watch: sending WOR,%s", upper_symbol);
     return send_command(cmd);
 }
 
@@ -976,8 +1149,10 @@ bool IQFeedLevel2::unwatch(const char* symbol) EXCLUDES(m_mutex) {
     // Per API spec (l2.txt), symbols must be uppercase
     char upper_symbol[32];
     to_uppercase(upper_symbol, symbol, sizeof(upper_symbol));
+    // ROR - Remove Order watch (matches WOR command)
+    // Note: RPL is for price level watches, ROR is for order watches
     char cmd[64];
-    std::snprintf(cmd, sizeof(cmd), "RPL,%s\r\n", upper_symbol);
+    std::snprintf(cmd, sizeof(cmd), "ROR,%s\r\n", upper_symbol);
 
     MutexLock lock(m_mutex);
     m_books.erase(upper_symbol);
@@ -1054,9 +1229,14 @@ void IQFeedLevel2::stream_thread() {
                 close(m_socket);
                 m_socket = -1;
             }
-            while (m_running && m_socket < 0) {
+            // Don't reconnect if L2 is unavailable (no subscription)
+            if (m_unavailable) {
+                LOG_I("iqfeed", "L2 not reconnecting - marked as unavailable");
+                break;
+            }
+            while (m_running && m_socket < 0 && !m_unavailable) {
                 safe_sleep_s(2);
-                if (m_running) {
+                if (m_running && !m_unavailable) {
                     reconnect();
                     if (m_socket < 0) {
                         safe_sleep_s(3);
@@ -1068,7 +1248,8 @@ void IQFeedLevel2::stream_thread() {
             safe_sleep_ms(10);
         }
     }
-    LOG_I("iqfeed", "L2 stream thread exiting (socket=%d, running=%d)", m_socket.load(), m_running.load());
+    LOG_I("iqfeed", "L2 stream thread exiting (socket=%d, running=%d, unavailable=%d)",
+          m_socket.load(), m_running.load(), m_unavailable.load());
 }
 
 void IQFeedLevel2::parse_l2_message(const std::string& line) {
@@ -1077,6 +1258,20 @@ void IQFeedLevel2::parse_l2_message(const std::string& line) {
     char msg_type = line[0];
 
     switch (msg_type) {
+        // Order messages (for equities / Nasdaq Level 2)
+        case '3':  // Order Add
+            parse_order_add(line.c_str());
+            break;
+        case '4':  // Order Update
+            parse_order_update(line.c_str());
+            break;
+        case '5':  // Order Delete
+            parse_order_delete(line.c_str());
+            break;
+        case '6':  // Order Summary
+            parse_order_summary(line.c_str());
+            break;
+        // Price Level messages (for futures)
         case '7':  // Price Level Summary
             parse_level_summary(line.c_str());
             break;
@@ -1086,10 +1281,41 @@ void IQFeedLevel2::parse_l2_message(const std::string& line) {
         case '9':  // Price Level Delete
             parse_level_delete(line.c_str());
             break;
+        // Error messages
+        case 'n':  // Symbol not found
+            LOG_W("iqfeed", "L2: Symbol not found: %s", line.c_str());
+            m_not_found_count++;
+            // If we've seen multiple "not found" and no valid data, L2 is likely unavailable
+            if (m_not_found_count >= 3 && m_valid_data_count == 0) {
+                LOG_W("iqfeed", "L2: Multiple symbols not found with no valid data - assuming no L2 subscription");
+                m_unavailable = true;
+                m_running = false;  // Signal thread to exit
+            }
+            break;
+        case 'q':  // No depth available (valid symbol but no data right now)
+            LOG_I("iqfeed", "L2: No depth available: %s", line.c_str());
+            // This is OK - symbol is valid, just no depth data yet
+            break;
         case 'T':  // Timestamp - ignore
-        case 'S':  // System message - ignore
+        case 'S':  // System message - check for important ones
+            if (line.find("SERVER DISCONNECTED") != std::string::npos) {
+                LOG_W("iqfeed", "L2: %s", line.c_str());
+            } else if (line.find("CLEAR DEPTH") != std::string::npos) {
+                LOG_I("iqfeed", "L2: %s", line.c_str());
+            }
             break;
         default:
+            // Log unknown message types with hex dump for debugging
+            {
+                char hex_dump[256] = "";
+                size_t hex_len = 0;
+                for (size_t i = 0; i < line.size() && hex_len < sizeof(hex_dump) - 4; i++) {
+                    hex_len += static_cast<size_t>(std::snprintf(hex_dump + hex_len, sizeof(hex_dump) - hex_len,
+                                                                  "%02X ", static_cast<unsigned char>(line[i])));
+                }
+                LOG_D("iqfeed", "L2: Unknown msg type '%c' len=%zu: [%s] hex=[%s]",
+                      msg_type, line.size(), line.c_str(), hex_dump);
+            }
             break;
     }
 }
@@ -1107,6 +1333,8 @@ void IQFeedLevel2::parse_level_summary(const char* data) EXCLUDES(m_mutex) {
                             msg_id, symbol, side, &price, &size, &order_count);
 
     if (parsed >= 5 && symbol[0] != '\0') {
+        m_valid_data_count++;  // We got valid L2 data
+
         L2Level level;
         level.price = price;
         level.size = size;
@@ -1198,5 +1426,145 @@ void IQFeedLevel2::parse_level_delete(const char* data) EXCLUDES(m_mutex) {
         if (callback_copy) {
             callback_copy(symbol_copy.c_str(), bids_copy, asks_copy);
         }
+    }
+}
+
+// ============================================================================
+// Order message parsing (for equities / Nasdaq Level 2)
+// Format: MsgType,SYMBOL,OrderID,MMID,Side,Price,Size,Priority,Precision,Time,Date
+// For Nasdaq L2: OrderID is blank, MMID contains market maker ID
+// ============================================================================
+
+void IQFeedLevel2::parse_order_summary(const char* data) EXCLUDES(m_mutex) {
+    // Format: 6,SYMBOL,OrderID,MMID,Side,Price,Size,Priority,Precision,Time,Date
+    // For equities: OrderID is empty, MMID has market maker
+    char msg_id[4] = "";
+    char symbol[16] = "";
+    char order_id[24] = "";
+    char mmid[8] = "";
+    char side[4] = "";
+    float price = 0;
+    int size = 0;
+
+    // Parse: 6,SYMBOL,,MMID,B,123.45,100,...
+    int parsed = std::sscanf(data, "%3[^,],%15[^,],%23[^,],%7[^,],%3[^,],%f,%d",
+                            msg_id, symbol, order_id, mmid, side, &price, &size);
+
+    if (parsed >= 7 && symbol[0] != '\0' && price > 0) {
+        L2Level level;
+        level.price = price;
+        level.size = size;
+        level.order_count = 1;
+        level.is_bid = (side[0] == 'B' || side[0] == 'b');
+
+        update_order_book(symbol, level, false);
+        m_valid_data_count++;  // We got valid L2 data
+
+        static int s_order_count = 0;
+        if (s_order_count++ % 100 == 0) {
+            LOG_D("iqfeed", "L2 Order Summary: %s %s %.2f x %d (MMID=%s)",
+                  symbol, level.is_bid ? "BID" : "ASK",
+                  static_cast<double>(price), size, mmid);
+        }
+    }
+}
+
+void IQFeedLevel2::parse_order_add(const char* data) EXCLUDES(m_mutex) {
+    // Same format as summary
+    parse_order_summary(data);
+}
+
+void IQFeedLevel2::parse_order_update(const char* data) EXCLUDES(m_mutex) {
+    // Same format as summary - update the level
+    parse_order_summary(data);
+}
+
+void IQFeedLevel2::parse_order_delete(const char* data) EXCLUDES(m_mutex) {
+    // Format: 5,SYMBOL,OrderID,Reserved,Side,Time,Date
+    // Note: No price in delete message, but we need to find and remove by OrderID/MMID
+    // For simplicity, we'll parse what we can - but delete handling is tricky
+    // because we don't get the price. For now, log it.
+    char msg_id[4] = "";
+    char symbol[16] = "";
+    char order_id[24] = "";
+    char reserved[8] = "";
+    char side[4] = "";
+
+    int parsed = std::sscanf(data, "%3[^,],%15[^,],%23[^,],%7[^,],%3[^,]",
+                            msg_id, symbol, order_id, reserved, side);
+
+    if (parsed >= 5 && symbol[0] != '\0') {
+        // Order delete doesn't include price, so we can't easily remove it
+        // The book will be refreshed with new Summary messages
+        // For now, just log for debugging
+        static int s_delete_count = 0;
+        if (s_delete_count++ % 100 == 0) {
+            LOG_D("iqfeed", "L2 Order Delete: %s side=%s (order_id=%s)",
+                  symbol, side, order_id);
+        }
+    }
+}
+
+void IQFeedLevel2::update_order_book(const char* symbol, const L2Level& level, bool is_delete) EXCLUDES(m_mutex) {
+    std::string symbol_copy;
+    std::vector<L2Level> bids_copy, asks_copy;
+    L2Callback callback_copy;
+
+    {
+        MutexLock lock(m_mutex);
+        BookData& book = m_books[symbol];
+        std::vector<L2Level>& levels = level.is_bid ? book.bids : book.asks;
+
+        if (is_delete) {
+            // Remove the level at this price
+            levels.erase(
+                std::remove_if(levels.begin(), levels.end(),
+                              [&level](const L2Level& l) {
+                                  return std::abs(l.price - level.price) < 0.0001f;
+                              }),
+                levels.end());
+        } else {
+            // Add or update level at this price
+            bool found = false;
+            for (auto& l : levels) {
+                if (std::abs(l.price - level.price) < 0.0001f) {
+                    // Aggregate: add size to existing level
+                    l.size += level.size;
+                    l.order_count++;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                levels.push_back(level);
+            }
+
+            // Sort: bids descending, asks ascending
+            if (level.is_bid) {
+                std::sort(book.bids.begin(), book.bids.end(),
+                         [](const L2Level& a, const L2Level& b) { return a.price > b.price; });
+            } else {
+                std::sort(book.asks.begin(), book.asks.end(),
+                         [](const L2Level& a, const L2Level& b) { return a.price < b.price; });
+            }
+
+            // Limit depth to prevent unbounded growth
+            const size_t MAX_LEVELS = 20;
+            if (book.bids.size() > MAX_LEVELS) {
+                book.bids.resize(MAX_LEVELS);
+            }
+            if (book.asks.size() > MAX_LEVELS) {
+                book.asks.resize(MAX_LEVELS);
+            }
+        }
+
+        symbol_copy = symbol;
+        bids_copy = book.bids;
+        asks_copy = book.asks;
+        callback_copy = m_callback;
+    }
+
+    if (callback_copy) {
+        callback_copy(symbol_copy.c_str(), bids_copy, asks_copy);
     }
 }

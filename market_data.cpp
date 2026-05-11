@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cassert>
+#include <unordered_set>
 
 // Convert symbol to uppercase (IQFeed returns symbols in uppercase)
 static std::string normalize_symbol(const char* symbol) {
@@ -185,14 +186,41 @@ bool MarketData::unsubscribe_quotes(const char* symbol) {
 }
 
 void MarketData::update_from_streams() {
-    if (!m_streams_connected) return;
+    if (!m_streams_connected) {
+        return;
+    }
+
+    // Collect loaded symbols (avoid holding lock while calling IQFeed)
+    std::vector<std::string> loaded_symbols;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& kv : m_symbols) {
+            if (kv.second.loaded) {
+                loaded_symbols.push_back(kv.first);
+            }
+        }
+    }
 
     // Update all loaded symbols from L1/L2 streams
-    for (auto& kv : m_symbols) {
-        if (kv.second.loaded) {
-            update_l1_quote(kv.first.c_str());
-            update_l2_book(kv.first.c_str());
+    for (const auto& sym : loaded_symbols) {
+        // Check if we have a quote - if not, the symbol may not be watched yet
+        L1Quote quote;
+        if (!get_iqfeed_level1().get_quote(sym.c_str(), quote)) {
+            // No quote - try to subscribe (idempotent, ok to call multiple times)
+            static std::unordered_set<std::string> s_subscribe_attempted;
+            if (s_subscribe_attempted.find(sym) == s_subscribe_attempted.end()) {
+                LOG_I("market", "Auto-subscribing to L1/L2 for loaded symbol: %s", sym.c_str());
+                s_subscribe_attempted.insert(sym);
+                if (!get_iqfeed_level1().watch(sym.c_str())) {
+                    LOG_W("market", "Failed to watch L1 for %s", sym.c_str());
+                }
+                if (!get_iqfeed_level2().watch(sym.c_str(), LEVEL2_DEPTH)) {
+                    LOG_W("market", "Failed to watch L2 for %s", sym.c_str());
+                }
+            }
         }
+        update_l1_quote(sym.c_str());
+        update_l2_book(sym.c_str());
     }
 }
 
@@ -243,7 +271,18 @@ static void create_candle_timestamp(char* dest, size_t dest_size, int hour, int 
 void MarketData::update_l1_quote(const char* symbol) {
     L1Quote quote;
     if (!get_iqfeed_level1().get_quote(symbol, quote)) {
+        static int s_no_quote_count = 0;
+        if (s_no_quote_count++ % 600 == 0) {
+            LOG_D("market", "update_l1_quote(%s): no quote available", symbol);
+        }
         return;
+    }
+
+    static int s_quote_count = 0;
+    if (s_quote_count++ % 60 == 0) {  // Log once per second at 60 FPS
+        LOG_D("market", "update_l1_quote(%s): last=%.2f bid=%.2f ask=%.2f time=%s",
+              symbol, static_cast<double>(quote.last), static_cast<double>(quote.bid),
+              static_cast<double>(quote.ask), quote.last_time);
     }
 
     // Parse tick time
@@ -251,7 +290,7 @@ void MarketData::update_l1_quote(const char* symbol) {
     bool has_time = parse_time_hhmm(quote.last_time, tick_hour, tick_minute);
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_symbols.find(symbol);
+    auto it = m_symbols.find(normalize_symbol(symbol));
     if (it == m_symbols.end()) {
         return;
     }
@@ -261,11 +300,20 @@ void MarketData::update_l1_quote(const char* symbol) {
 
     // Skip candle updates if we don't have time info or no tick occurred
     if (!has_time || quote.last <= 0) {
+        static int s_skip_count = 0;
+        if (s_skip_count++ % 600 == 0) {
+            LOG_D("market", "Skipping candle update: has_time=%d last=%.2f", has_time, static_cast<double>(quote.last));
+        }
         return;
     }
 
     // Update 1-minute candles
-    if (!data.candles_1m.empty()) {
+    if (data.candles_1m.empty()) {
+        static int s_empty_1m_count = 0;
+        if (s_empty_1m_count++ % 600 == 0) {
+            LOG_D("market", "candles_1m is empty for %s", symbol);
+        }
+    } else {
         Candle& last_1m = data.candles_1m.back();
         if (is_same_candle_period(last_1m.timestamp, tick_hour, tick_minute, 1)) {
             // Update existing candle
@@ -336,7 +384,7 @@ void MarketData::update_l2_book(const char* symbol) {
     std::vector<L2Level> bids, asks;
     if (get_iqfeed_level2().get_book(symbol, bids, asks)) {
         std::lock_guard<std::mutex> lock(m_mutex);
-        auto it = m_symbols.find(symbol);
+        auto it = m_symbols.find(normalize_symbol(symbol));
         if (it != m_symbols.end()) {
             SymbolData& data = it->second;
             data.level2_bids.clear();

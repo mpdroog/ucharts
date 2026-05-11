@@ -259,10 +259,25 @@ private:
     char m_host[64];
     int m_port;
 
+    // Field indices from S,CURRENT UPDATE FIELDNAMES response (-1 = not present)
+    int m_idx_last = -1;
+    int m_idx_last_size = -1;
+    int m_idx_last_time = -1;
+    int m_idx_total_vol = -1;
+    int m_idx_bid = -1;
+    int m_idx_bid_size = -1;
+    int m_idx_ask = -1;
+    int m_idx_ask_size = -1;
+    int m_idx_open = -1;
+    int m_idx_high = -1;
+    int m_idx_low = -1;
+    int m_idx_close = -1;
+
     void stream_thread();
     bool send_command(const char* cmd);
     bool reconnect();  // Attempt to reconnect
     void parse_l1_message(const std::string& line);
+    void parse_field_names(const std::string& line);  // Parse S,CURRENT UPDATE FIELDNAMES
     // IMPORTANT: These methods must NOT invoke callbacks while holding m_mutex
     void parse_summary_message(const char* data) EXCLUDES(m_mutex);
     void parse_update_message(const char* data) EXCLUDES(m_mutex);
@@ -320,6 +335,9 @@ private:
 
     std::atomic<int> m_socket;  // Atomic for thread-safe is_connected() checks
     std::atomic<bool> m_running;
+    std::atomic<bool> m_unavailable;  // True if L2 subscription unavailable (don't reconnect)
+    std::atomic<int> m_not_found_count;  // Count of "symbol not found" responses
+    std::atomic<int> m_valid_data_count;  // Count of valid L2 data received
     std::thread m_thread;
     Mutex m_mutex;
     std::map<std::string, BookData> m_books GUARDED_BY(m_mutex);
@@ -333,9 +351,16 @@ private:
     bool reconnect();  // Attempt to reconnect
     void parse_l2_message(const std::string& line);
     // IMPORTANT: These methods must NOT invoke callbacks while holding m_mutex
+    // Price Level messages (for futures)
     void parse_level_summary(const char* data) EXCLUDES(m_mutex);
     void parse_level_update(const char* data) EXCLUDES(m_mutex);
     void parse_level_delete(const char* data) EXCLUDES(m_mutex);
+    // Order messages (for equities / Nasdaq Level 2)
+    void parse_order_summary(const char* data) EXCLUDES(m_mutex);
+    void parse_order_add(const char* data) EXCLUDES(m_mutex);
+    void parse_order_update(const char* data) EXCLUDES(m_mutex);
+    void parse_order_delete(const char* data) EXCLUDES(m_mutex);
+    void update_order_book(const char* symbol, const L2Level& level, bool is_delete) EXCLUDES(m_mutex);
     bool set_protocol();
 };
 
