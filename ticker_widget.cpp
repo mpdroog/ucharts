@@ -115,9 +115,15 @@ void TickerWidget::update_market_data() {
     }
 
     // Get Level 1 quote data (only if L1 is connected)
-    if (get_iqfeed_level1().is_connected()) {
+    bool l1_connected = get_iqfeed_level1().is_connected();
+    if (l1_connected) {
         L1Quote quote;
-        if (get_iqfeed_level1().get_quote(m_symbol, quote)) {
+        bool got_quote = get_iqfeed_level1().get_quote(m_symbol, quote);
+        static int s_ticker_log_count = 0;
+        if (s_ticker_log_count++ % 300 == 0) {
+            LOG_D("ticker", "get_quote('%s') = %d, last=%.2f", m_symbol, got_quote, static_cast<double>(got_quote ? quote.last : 0.0f));
+        }
+        if (got_quote) {
             m_best_bid = quote.bid;
             m_best_ask = quote.ask;
             m_last = quote.last;
@@ -284,16 +290,16 @@ bool TickerWidget::render(ImVec2 size) {
     ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(border_color));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, m_selected ? 2.0f : 1.0f);
 
+    // Remove all spacing/padding for maximum data density - push BEFORE BeginChild
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2, 2));
+
     if (ImGui::BeginChild("TickerContent", size, true)) {
         // Check for click
         if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
             clicked = true;
         }
-
-        // Remove all spacing/padding for maximum data density
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 1));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
         ImVec2 content_size = ImGui::GetContentRegionAvail();
         // Symbol header / input
@@ -389,68 +395,56 @@ bool TickerWidget::render(ImVec2 size) {
         // Calculate remaining height with proper overhead budgeting
         float used_height = ImGui::GetCursorPosY();
 
-        // Budget for overhead (explicit constants for clarity)
-        const float CHILD_OVERHEAD = 8.0f;      // BeginChild internal space
-        const float COLUMNS_HEADER = 16.0f;     // Columns header row
-        const float SAFETY_MARGIN = 10.0f;      // Extra buffer
-        const float ORDER_ENTRY_HEIGHT = 18.0f; // Order entry buttons
+        // Budget for overhead
+        const float ORDER_ENTRY_HEIGHT = 16.0f; // Order entry buttons (matches button_height)
+
+        // Use ImGui's actual text line height for accurate row calculation
+        float row_height = ImGui::GetTextLineHeight();
 
         // Calculate available space for L2/TS content
-        float available_for_panels = content_size.y - used_height - ORDER_ENTRY_HEIGHT - SAFETY_MARGIN;
+        float available_for_panels = content_size.y - used_height - ORDER_ENTRY_HEIGHT;
         float panel_width = content_size.x / 2.0f;
 
-        // Each panel needs overhead subtracted from its budget
-        float l2_available = (available_for_panels / 2.0f) - CHILD_OVERHEAD - COLUMNS_HEADER;
-        float ts_available = (available_for_panels / 2.0f) - CHILD_OVERHEAD - COLUMNS_HEADER;
-
-        // Calculate max rows that fit (each row ~16px with FramePadding)
-        const float ROW_HEIGHT = 16.0f;
-        int max_l2_rows = static_cast<int>(l2_available / ROW_HEIGHT);
-        int max_ts_rows = static_cast<int>(ts_available / ROW_HEIGHT);
+        // Calculate max rows that fit
+        int max_l2_rows = static_cast<int>(available_for_panels / row_height);
+        int max_ts_rows = static_cast<int>(available_for_panels / row_height);
 
         // Clamp to reasonable minimums and maximums
-        max_l2_rows = std::max(5, std::min(max_l2_rows, 20));
-        max_ts_rows = std::max(5, std::min(max_ts_rows, 30));
+        max_l2_rows = std::max(5, std::min(max_l2_rows, 25));
+        max_ts_rows = std::max(5, std::min(max_ts_rows, 40));
 
-        // Render L2 and TS directly side-by-side (NO outer L2TSPanel wrapper)
-        ImGui::BeginChild("L2Panel", ImVec2(panel_width, available_for_panels), false);
-        render_level2(ImVec2(panel_width, available_for_panels - CHILD_OVERHEAD), max_l2_rows);
-        ImGui::EndChild();
-
+        // Render L2 and TS directly side-by-side
+        render_level2(ImVec2(panel_width, available_for_panels), max_l2_rows);
         ImGui::SameLine(0, 0);
+        render_time_sales(ImVec2(panel_width, available_for_panels), max_ts_rows);
 
-        ImGui::BeginChild("TSPanel", ImVec2(panel_width, available_for_panels), false);
-        render_time_sales(ImVec2(panel_width, available_for_panels - CHILD_OVERHEAD), max_ts_rows);
-        ImGui::EndChild();
-
-        // Order entry at bottom
+        // Order entry directly after panels (no SetCursorPosY to see natural position)
         render_order_entry(content_size.x);
-
-        ImGui::PopStyleVar(3);  // Pop ItemSpacing, FramePadding, and WindowPadding
     }
     ImGui::EndChild();
 
-    ImGui::PopStyleVar();  // ChildBorderSize
+    ImGui::PopStyleVar(4);  // Pop ItemSpacing, FramePadding, WindowPadding, ChildBorderSize
     ImGui::PopStyleColor();  // Border color
     ImGui::PopID();
 
     return clicked;
 }
 
-void TickerWidget::render_level2(ImVec2 size, int max_rows) {
-    if (ImGui::BeginChild("Level2", size, false)) {
+void TickerWidget::render_level2(ImVec2 size, int /* max_rows */) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+    if (ImGui::BeginChild("Level2", size, false, ImGuiWindowFlags_NoScrollbar)) {
         // Ultra-compact 4-column layout: Price | Size | Price | Size
         float col_width = size.x / 4.0f;
 
-        ImGui::Columns(4, "L2Header", false);
+        ImGui::Columns(4, "L2Cols", false);
         ImGui::SetColumnWidth(0, col_width);
         ImGui::SetColumnWidth(1, col_width);
         ImGui::SetColumnWidth(2, col_width);
         ImGui::SetColumnWidth(3, col_width);
 
-        // Use dynamic max_rows (calculated to fit available space)
-        size_t display_rows = static_cast<size_t>(std::min(max_rows,
-                              static_cast<int>(std::max(m_bids.size(), m_asks.size()))));
+        // Render all available data - child window clips overflow
+        size_t display_rows = std::max(m_bids.size(), m_asks.size());
         for (size_t i = 0; i < display_rows; ++i) {
             // Bid side
             if (i < m_bids.size()) {
@@ -484,24 +478,25 @@ void TickerWidget::render_level2(ImVec2 size, int max_rows) {
                 ImGui::NextColumn();
             }
         }
-
-        ImGui::Columns(1);
+        // Don't call Columns(1) - it may add spacing
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar(2);  // WindowPadding, ItemSpacing for Level2
 }
 
-void TickerWidget::render_time_sales(ImVec2 size, int max_rows) {
-    if (ImGui::BeginChild("TimeSales", size, false)) {
-        // Ultra-compact 2-column layout: Price | Size
+void TickerWidget::render_time_sales(ImVec2 size, int /* max_rows */) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+    if (ImGui::BeginChild("TimeSales", size, false, ImGuiWindowFlags_NoScrollbar)) {
+        // Ultra-compact 2-column layout: Price | Size (right-aligned)
         float col_width = size.x / 2.0f;
 
-        ImGui::Columns(2, "TSHeader", false);
+        ImGui::Columns(2, "TSCols", false);
         ImGui::SetColumnWidth(0, col_width);
         ImGui::SetColumnWidth(1, col_width);
 
-        // Use dynamic max_rows (calculated to fit available space)
-        size_t display_rows = static_cast<size_t>(std::min(max_rows,
-                              static_cast<int>(m_time_sales.size())));
+        // Render all available data - child window clips overflow
+        size_t display_rows = m_time_sales.size();
         for (size_t i = 0; i < display_rows; ++i) {
             const TimeSalesEntry& entry = m_time_sales[i];
 
@@ -520,21 +515,33 @@ void TickerWidget::render_time_sales(ImVec2 size, int max_rows) {
             }
 
             ImGui::PushStyleColor(ImGuiCol_Text, color);
-            ImGui::Text("%.2f", static_cast<double>(entry.price));
+
+            // Right-align price
+            char price_buf[16];
+            snprintf(price_buf, sizeof(price_buf), "%.2f", static_cast<double>(entry.price));
+            float price_width = ImGui::CalcTextSize(price_buf).x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + col_width - price_width - 4.0f);
+            ImGui::TextUnformatted(price_buf);
             ImGui::NextColumn();
-            // Show size in lots (100 shares = 1 lot)
+
+            // Right-align size
+            char size_buf[16];
             if (entry.size >= 1000) {
-                ImGui::Text("%.1fK", static_cast<double>(entry.size) / 1000.0);
+                snprintf(size_buf, sizeof(size_buf), "%.1fK", static_cast<double>(entry.size) / 1000.0);
             } else {
-                ImGui::Text("%d", entry.size);
+                snprintf(size_buf, sizeof(size_buf), "%d", entry.size);
             }
+            float size_width = ImGui::CalcTextSize(size_buf).x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + col_width - size_width - 4.0f);
+            ImGui::TextUnformatted(size_buf);
             ImGui::NextColumn();
+
             ImGui::PopStyleColor();
         }
-
-        ImGui::Columns(1);
+        // Don't call Columns(1) - it may add spacing
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar(2);  // WindowPadding, ItemSpacing
 }
 
 void TickerWidget::render_order_entry(float width) {

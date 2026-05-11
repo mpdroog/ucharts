@@ -25,7 +25,7 @@ static const int NUM_TICKERS = 4;            // Number of ticker windows
 static const float ORDER_OFFSET = 0.05f;     // $0.05 offset for market orders
 static const int MAX_SYMBOL_LEN = 8;         // Maximum symbol length
 static const int MAX_LEVEL2_ROWS = 10;       // Max level 2 rows to display
-static const int MAX_TIME_SALES_ROWS = 15;   // Max time & sales rows to display
+static const int MAX_TIME_SALES_ROWS = 20;   // Max time & sales rows to store
 
 // Line styles
 enum class LineStyle {
