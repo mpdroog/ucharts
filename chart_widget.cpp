@@ -26,8 +26,22 @@ void ChartWidget::set_symbol(const char* symbol) {
 }
 
 void ChartWidget::set_candles(const std::vector<Candle>& candles) {
-    // Only update if dirty (symbol changed) or data actually different
-    if (m_indicators_dirty || candles.size() != m_candles.size()) {
+    // Check if data actually changed
+    bool data_changed = (candles.size() != m_candles.size());
+
+    // Also check if last candle changed (L1 updates modify last candle's OHLC)
+    if (!data_changed && !candles.empty() && !m_candles.empty()) {
+        const Candle& new_last = candles.back();
+        const Candle& old_last = m_candles.back();
+        if (new_last.close != old_last.close ||
+            new_last.high != old_last.high ||
+            new_last.low != old_last.low ||
+            new_last.open != old_last.open) {
+            data_changed = true;
+        }
+    }
+
+    if (m_indicators_dirty || data_changed) {
         m_candles = candles;
     }
 }
