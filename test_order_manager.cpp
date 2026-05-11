@@ -180,6 +180,7 @@ TEST(buy_order_creates_pending) {
     init_test_env();
     reset_order_manager();
 
+    std::lock_guard<std::mutex> lock(g_om_mutex);
     int64_t id = g_test_om.buy("TEST", 100, 100.10f);
     ASSERT_TRUE(id > 0);
 
@@ -454,53 +455,62 @@ TEST(order_callback) {
     init_test_env();
     reset_order_manager();
 
-    // Verify WebSocket is still connected
-    if (!g_test_ws.is_connected()) {
-        std::printf("WARNING: WebSocket disconnected before order_callback test\n");
-    }
-
     std::atomic<int> callback_count{0};
     g_test_om.set_order_callback([&callback_count](const Order&) {
         callback_count.fetch_add(1);
     });
 
     g_test_om.buy("TEST", 100, 100.10f);
-    ASSERT_EQ(callback_count.load(), 1);  // Called once on buy()
+    // After buy() returns, at least 1 callback has been made (from buy() itself)
+    // WebSocket events (Accepted, Filled) may arrive async
+    ASSERT_TRUE(callback_count.load() >= 1);
 
     process_fills_stub(&g_test_om);
-    // Callback called 3 times total:
+    // After fill completes, callback should have been called multiple times:
     // 1. Order placed (from buy())
     // 2. Order accepted (from WebSocket - broker acknowledged)
     // 3. Order filled (from WebSocket - execution complete)
-    ASSERT_EQ(callback_count.load(), 3);
+    ASSERT_TRUE(callback_count.load() >= 3);
 }
 
 TEST(persistence) {
-    // First session - create orders and positions
+    // Use global test environment with WebSocket
+    init_test_env();
+    reset_order_manager();
+
+    // First session - create position via WebSocket fills
+    unlink(TEST_DB);
+    g_test_db.close();  // Close if open
+    ASSERT_TRUE(g_test_db.init(TEST_DB));
+
+    // Reset global order manager to use the persistence test database
     {
-        unlink(TEST_DB);
-        Database db;
-        db.init(TEST_DB);
-
-        MarketData market;
-        market.set_data_source(DataSourceMode::FILE);
-        market.set_data_dir(TEST_DATA_DIR);
-        ASSERT_TRUE(market.load_symbol("TEST"));
-
-        OrderManager om;
-        om.init(&db, &market);
-
-        om.buy("TEST", 100, 100.10f);
-        process_fills_stub(&om);
-
-        om.save_to_database();
-        db.close();
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        g_test_om = OrderManager();
+        g_test_om.init(&g_test_db, &g_test_market);
+        g_test_om.set_tradezero_client(&g_test_tz_client);
     }
 
-    // Second session - verify data loaded
+    // Place order and wait for fill via WebSocket
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        int64_t order_id = g_test_om.buy("TEST", 100, 100.10f);
+        ASSERT_TRUE(order_id > 0);
+    }
+    ASSERT_TRUE(wait_for_pending_count(0u, 2000));
+
+    // Verify position exists before saving
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        ASSERT_EQ(g_test_om.get_open_positions().size(), 1u);
+        g_test_om.save_to_database();
+    }
+    g_test_db.close();
+
+    // Second session - verify data loaded from database
     {
         Database db;
-        db.init(TEST_DB);
+        ASSERT_TRUE(db.init(TEST_DB));
 
         MarketData market;
         market.set_data_source(DataSourceMode::FILE);

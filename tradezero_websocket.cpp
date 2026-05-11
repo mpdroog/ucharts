@@ -203,9 +203,6 @@ TradeZeroWebSocket::~TradeZeroWebSocket() {
 }
 
 void TradeZeroWebSocket::set_credentials(const char* api_key_id, const char* api_secret_key, const char* account_id) {
-    LOG_I("tradezero_ws", "set_credentials: this=%p, key='%s', secret='%s'",
-          static_cast<void*>(this), api_key_id, api_secret_key);
-
     std::strncpy(m_api_key_id, api_key_id, sizeof(m_api_key_id) - 1);
     m_api_key_id[sizeof(m_api_key_id) - 1] = '\0';
 
@@ -214,8 +211,6 @@ void TradeZeroWebSocket::set_credentials(const char* api_key_id, const char* api
 
     std::strncpy(m_account_id, account_id, sizeof(m_account_id) - 1);
     m_account_id[sizeof(m_account_id) - 1] = '\0';
-
-    LOG_I("tradezero_ws", "set_credentials done: m_api_key_id='%s'", m_api_key_id);
 }
 
 void TradeZeroWebSocket::set_url(const char* host, int port, bool use_ssl) {
@@ -234,9 +229,6 @@ bool TradeZeroWebSocket::connect(TZStream stream) {
         LOG_W("tradezero_ws", "Already connected");
         return true;
     }
-
-    LOG_I("tradezero_ws", "connect: this=%p, m_api_key_id='%s' before thread",
-          static_cast<void*>(this), m_api_key_id);
 
     m_stream = stream;
     m_running.store(true);
@@ -314,9 +306,6 @@ const char* TradeZeroWebSocket::last_error() const {
 }
 
 void TradeZeroWebSocket::worker_thread() {
-    LOG_I("tradezero_ws", "Worker thread started: this=%p, m_api_key_id='%s'",
-          static_cast<void*>(this), m_api_key_id);
-
     // Set active client for callback access
     g_active_ws_client = this;
 
@@ -409,21 +398,10 @@ void TradeZeroWebSocket::worker_thread() {
     if (g_active_ws_client == this) {
         g_active_ws_client = nullptr;
     }
-
-    LOG_I("tradezero_ws", "Worker thread stopped");
 }
 
 void TradeZeroWebSocket::handle_message(const std::string& message) {
-    // Debug: log first few bytes of message
-    if (message.size() > 0) {
-        LOG_I("tradezero_ws", "Received message len=%zu, first bytes: 0x%02X 0x%02X 0x%02X",
-              message.size(),
-              static_cast<unsigned char>(message[0]),
-              message.size() > 1 ? static_cast<unsigned char>(message[1]) : 0,
-              message.size() > 2 ? static_cast<unsigned char>(message[2]) : 0);
-    }
-
-    // Parse JSON once to determine message type (more robust than string matching)
+    // Parse JSON to determine message type
     try {
         auto j = json::parse(message);
 
@@ -472,11 +450,9 @@ void TradeZeroWebSocket::parse_system_message(const std::string& json_str) {
         std::string status = j["status"];
 
         if (status == "PENDING_AUTH") {
-            LOG_I("tradezero_ws", "Server waiting for authentication");
             // Auth message already sent in ESTABLISHED callback
         }
         else if (status == "CONNECTED") {
-            LOG_I("tradezero_ws", "Authenticated successfully");
             m_authenticated.store(true);
             m_reconnect_attempts.store(0);  // Reset reconnect counter on success
             send_subscribe_message();
@@ -505,18 +481,12 @@ void TradeZeroWebSocket::parse_system_message(const std::string& json_str) {
 }
 
 void TradeZeroWebSocket::send_auth_message() {
-    LOG_I("tradezero_ws", "send_auth_message: this=%p, key='%s' (len=%zu)",
-          static_cast<void*>(this), m_api_key_id, std::strlen(m_api_key_id));
-
     try {
         json auth_msg = {
             {"key", m_api_key_id},
             {"secret", m_api_secret_key}
         };
-
-        std::string msg = auth_msg.dump();
-        LOG_I("tradezero_ws", "Queueing auth message: %s", msg.c_str());
-        queue_message(msg);
+        queue_message(auth_msg.dump());
     } catch (const std::exception& e) {
         LOG_E("tradezero_ws", "Failed to create auth message: %s", e.what());
     }
@@ -534,9 +504,7 @@ void TradeZeroWebSocket::send_subscribe_message() {
         };
     }
 
-    std::string msg = sub_msg.dump();
-    LOG_I("tradezero_ws", "Queueing subscribe message");
-    queue_message(msg);
+    queue_message(sub_msg.dump());
     m_connected.store(true);
 }
 

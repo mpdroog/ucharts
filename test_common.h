@@ -29,24 +29,29 @@ static void test_init(int argc, char* argv[]) {
     if (g_verbose) std::printf("PASSED\n"); \
 } while(0)
 
+// Use _Exit to skip static destructor calls on assertion failure
+// This avoids mutex crashes from WebSocket cleanup during error exit
 #define ASSERT_EQ(a, b) do { \
     if ((a) != (b)) { \
         std::printf("FAILED: %s != %s (line %d)\n", #a, #b, __LINE__); \
-        std::exit(1); \
+        std::fflush(stdout); \
+        _Exit(1); \
     } \
 } while(0)
 
 #define ASSERT_FLOAT_EQ(a, b, eps) do { \
     if (std::fabs((a) - (b)) > (eps)) { \
         std::printf("FAILED: %s (%.4f) != %s (%.4f) (line %d)\n", #a, (double)(a), #b, (double)(b), __LINE__); \
-        std::exit(1); \
+        std::fflush(stdout); \
+        _Exit(1); \
     } \
 } while(0)
 
 #define ASSERT_TRUE(cond) do { \
     if (!(cond)) { \
         std::printf("FAILED: %s is false (line %d)\n", #cond, __LINE__); \
-        std::exit(1); \
+        std::fflush(stdout); \
+        _Exit(1); \
     } \
 } while(0)
 
@@ -55,7 +60,8 @@ static void test_init(int argc, char* argv[]) {
 #define ASSERT_STREQ(a, b) do { \
     if (std::strcmp((a), (b)) != 0) { \
         std::printf("FAILED: \"%s\" != \"%s\" (line %d)\n", (a), (b), __LINE__); \
-        std::exit(1); \
+        std::fflush(stdout); \
+        _Exit(1); \
     } \
 } while(0)
 

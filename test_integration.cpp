@@ -1,24 +1,21 @@
 // test_integration.cpp - Integration tests for ucharts trading platform
 // Tests that all modules work together correctly
-//
-// NOTE: Order fill simulation (process_fills) was removed in favor of TradeZero WebSocket integration.
-// Tests that relied on simulated fills are now disabled.
 
 #include "types.h"
 #include "database.h"
 #include "market_data.h"
 #include "order_manager.h"
 #include "tradezero_client.h"
+#include "tradezero_websocket.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 #include <sys/stat.h>
-
-// Stub for removed OrderManager::process_fills() method
-static void process_fills_stub(OrderManager*) {
-    // No-op: Order fills now come from TradeZero WebSocket callbacks
-}
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <mutex>
 
 // Test framework
 static int g_tests_run = 0;
@@ -70,13 +67,67 @@ static void test_init(int argc, char* argv[]) {
 static const char* TEST_DATA_DIR = "test_integration_data";
 static const char* TEST_DB = "test_integration.db";
 
-// Global TradeZero client for testing
+// Global test instances
+static Database g_test_db;
+static MarketData g_test_market;
 static TradeZeroClient g_test_tz_client;
+static TradeZeroWebSocket g_test_ws;
+static OrderManager g_test_om;
+static std::mutex g_om_mutex;
+static bool g_ws_connected = false;
+
+// WebSocket callback to forward order updates to global OrderManager
+static void on_ws_order_update(const TZOrderUpdate& update) {
+    std::lock_guard<std::mutex> lock(g_om_mutex);
+    g_test_om.on_tradezero_order_update(update);
+}
+
+// Helper to wait for pending orders count
+static bool wait_for_pending_count(size_t expected, int timeout_ms = 2000) {
+    int waited = 0;
+    while (waited < timeout_ms) {
+        {
+            std::lock_guard<std::mutex> lock(g_om_mutex);
+            if (g_test_om.get_pending_orders().size() == expected) {
+                return true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        waited += 10;
+    }
+    return false;
+}
+
+// Reset global order manager for clean test state
+static void reset_global_om() {
+    std::lock_guard<std::mutex> lock(g_om_mutex);
+    g_test_om = OrderManager();
+    g_test_om.init(&g_test_db, &g_test_market);
+    g_test_om.set_tradezero_client(&g_test_tz_client);
+}
 
 static void setup_tradezero_client() {
-    // Configure TradeZero client to use mock server
+    // Configure TradeZero REST client to use mock server
     g_test_tz_client.set_base_url("http://localhost:8080/v1/api");
     g_test_tz_client.set_credentials("test_key", "test_secret", "test_account");
+
+    // Configure and connect WebSocket (once)
+    if (!g_ws_connected) {
+        g_test_ws.set_url("localhost", 8081, false);
+        g_test_ws.set_credentials("test_key", "test_secret", "test_account");
+        g_test_ws.set_order_callback(on_ws_order_update);
+
+        if (g_test_ws.connect(TZStream::PORTFOLIO)) {
+            g_ws_connected = true;
+            // Wait for connection to establish
+            int timeout_ms = 1000;
+            int waited = 0;
+            while (!g_test_ws.is_connected() && waited < timeout_ms) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                waited += 10;
+            }
+        }
+    }
 }
 
 static void create_test_directory() {
@@ -161,136 +212,174 @@ static void create_test_market_data() {
 // ============================================================================
 
 TEST(database_and_order_manager_integration) {
-    Database db;
-    MarketData market;
-    OrderManager order_mgr;
+    // Initialize test environment with WebSocket
+    setup_tradezero_client();
 
-    ASSERT(db.init(TEST_DB));
-    order_mgr.init(&db, &market);
-    order_mgr.set_tradezero_client(&g_test_tz_client);
+    // Initialize global order manager
+    ASSERT(g_test_db.init(TEST_DB));
+    g_test_om = OrderManager();  // Reset state
+    g_test_om.init(&g_test_db, &g_test_market);
+    g_test_om.set_tradezero_client(&g_test_tz_client);
 
-    // Create a buy order (should fail without market data for fills)
-    int64_t order_id = order_mgr.buy("TEST", 100, 100.05f);
+    // Create a buy order
+    int64_t order_id;
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        order_id = g_test_om.buy("TEST", 100, 100.05f);
+    }
     ASSERT(order_id > 0);
 
     // Verify order is pending
-    const std::vector<Order>& pending = order_mgr.get_pending_orders();
-    ASSERT_EQ(pending.size(), 1u);
-    ASSERT_STREQ(pending[0].symbol, "TEST");
-    ASSERT_EQ(pending[0].quantity, 100);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        const std::vector<Order>& pending = g_test_om.get_pending_orders();
+        ASSERT_EQ(pending.size(), 1u);
+        ASSERT_STREQ(pending[0].symbol, "TEST");
+        ASSERT_EQ(pending[0].quantity, 100);
+    }
 
-    // Cancel the order
-    ASSERT(order_mgr.cancel_order(order_id));
-    ASSERT(order_mgr.get_pending_orders().empty());
+    // Cancel the order (async - WebSocket will confirm)
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        ASSERT(g_test_om.cancel_order(order_id));
+    }
 
-    db.close();
+    // Wait for cancel confirmation via WebSocket
+    ASSERT(wait_for_pending_count(0));
+
+    g_test_db.close();
 }
 
 TEST(market_data_and_order_manager_integration) {
-    Database db;
-    MarketData market;
-    OrderManager order_mgr;
-
-    ASSERT(db.init(TEST_DB));
-    market.set_data_source(DataSourceMode::FILE);
-    market.set_data_dir(TEST_DATA_DIR);
-    ASSERT(market.load_symbol("TEST"));
-    order_mgr.init(&db, &market);
-    order_mgr.set_tradezero_client(&g_test_tz_client);
+    // Initialize with WebSocket
+    setup_tradezero_client();
+    ASSERT(g_test_db.init(TEST_DB));
+    g_test_market.set_data_source(DataSourceMode::FILE);
+    g_test_market.set_data_dir(TEST_DATA_DIR);
+    ASSERT(g_test_market.load_symbol("TEST"));
+    reset_global_om();
 
     // Get best bid/ask
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
+    ASSERT(g_test_market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     ASSERT(best_bid > 0);
     ASSERT(best_ask > 0);
     ASSERT(best_ask > best_bid);
 
-    // Place buy order at ask price (should fill immediately)
-    int64_t order_id = order_mgr.buy("TEST", 50, best_ask);
+    // Place buy order at ask price
+    int64_t order_id;
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        order_id = g_test_om.buy("TEST", 50, best_ask);
+    }
     ASSERT(order_id > 0);
 
-    // Process fills
-    process_fills_stub(&order_mgr);
-
-    // Order should be filled
-    ASSERT(order_mgr.get_pending_orders().empty());
+    // Wait for fill via WebSocket
+    ASSERT(wait_for_pending_count(0));
 
     // Should have open position
-    const std::vector<Position>& positions = order_mgr.get_open_positions();
-    ASSERT_EQ(positions.size(), 1u);
-    ASSERT_STREQ(positions[0].symbol, "TEST");
-    ASSERT_EQ(positions[0].quantity, 50);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        const std::vector<Position>& positions = g_test_om.get_open_positions();
+        ASSERT_EQ(positions.size(), 1u);
+        ASSERT_STREQ(positions[0].symbol, "TEST");
+        ASSERT_EQ(positions[0].quantity, 50);
+    }
 
-    db.close();
+    g_test_db.close();
 }
 
 TEST(full_trading_workflow) {
-    Database db;
-    MarketData market;
-    OrderManager order_mgr;
-
-    ASSERT(db.init(TEST_DB));
-    market.set_data_source(DataSourceMode::FILE);
-    market.set_data_dir(TEST_DATA_DIR);
-    ASSERT(market.load_symbol("TEST"));
-    order_mgr.init(&db, &market);
-    order_mgr.set_tradezero_client(&g_test_tz_client);
+    // Initialize with WebSocket
+    setup_tradezero_client();
+    ASSERT(g_test_db.init(TEST_DB));
+    g_test_market.set_data_source(DataSourceMode::FILE);
+    g_test_market.set_data_dir(TEST_DATA_DIR);
+    ASSERT(g_test_market.load_symbol("TEST"));
+    reset_global_om();
 
     // Get market prices
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
+    ASSERT(g_test_market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     // Step 1: Buy 100 shares
-    int64_t buy_order = order_mgr.buy("TEST", 100, best_ask);
-    ASSERT(buy_order > 0);
-    process_fills_stub(&order_mgr);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        int64_t buy_order = g_test_om.buy("TEST", 100, best_ask);
+        ASSERT(buy_order > 0);
+    }
+    ASSERT(wait_for_pending_count(0));
 
     // Verify position
-    Position* pos = order_mgr.find_position("TEST");
-    ASSERT(pos != nullptr);
-    ASSERT_EQ(pos->quantity, 100);
-    float entry_price = pos->avg_price;
+    float entry_price;
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        Position* pos = g_test_om.find_position("TEST");
+        ASSERT(pos != nullptr);
+        ASSERT_EQ(pos->quantity, 100);
+        entry_price = pos->avg_price;
+    }
 
     // Step 2: Buy 50 more (averaging)
-    buy_order = order_mgr.buy("TEST", 50, best_ask + 0.10f);
-    process_fills_stub(&order_mgr);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        int64_t buy_order = g_test_om.buy("TEST", 50, best_ask + 0.10f);
+        ASSERT(buy_order > 0);
+    }
+    ASSERT(wait_for_pending_count(0));
 
-    pos = order_mgr.find_position("TEST");
-    ASSERT(pos != nullptr);
-    ASSERT_EQ(pos->quantity, 150);
-    ASSERT(pos->avg_price >= entry_price);  // Avg price should be >= original
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        Position* pos = g_test_om.find_position("TEST");
+        ASSERT(pos != nullptr);
+        ASSERT_EQ(pos->quantity, 150);
+        ASSERT(pos->avg_price >= entry_price);
+    }
 
     // Step 3: Sell 50 shares
-    int64_t sell_order = order_mgr.sell("TEST", 50, best_bid);
-    ASSERT(sell_order > 0);
-    process_fills_stub(&order_mgr);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        int64_t sell_order = g_test_om.sell("TEST", 50, best_bid);
+        ASSERT(sell_order > 0);
+    }
+    ASSERT(wait_for_pending_count(0));
 
     // Should have 100 shares remaining
-    pos = order_mgr.find_position("TEST");
-    ASSERT(pos != nullptr);
-    ASSERT_EQ(pos->quantity, 100);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        Position* pos = g_test_om.find_position("TEST");
+        ASSERT(pos != nullptr);
+        ASSERT_EQ(pos->quantity, 100);
 
-    // Should have 1 closed position
-    const std::vector<ClosedPosition>& closed = order_mgr.get_closed_positions();
-    ASSERT_EQ(closed.size(), 1u);
-    ASSERT_EQ(closed[0].quantity, 50);
+        // Should have 1 closed position
+        const std::vector<ClosedPosition>& closed = g_test_om.get_closed_positions();
+        ASSERT_EQ(closed.size(), 1u);
+        ASSERT_EQ(closed[0].quantity, 50);
+    }
 
     // Step 4: Sell remaining position
-    sell_order = order_mgr.sell("TEST", 100, best_bid);
-    process_fills_stub(&order_mgr);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        int64_t sell_order = g_test_om.sell("TEST", 100, best_bid);
+        ASSERT(sell_order > 0);
+    }
+    ASSERT(wait_for_pending_count(0));
 
     // Position should be gone
-    pos = order_mgr.find_position("TEST");
-    ASSERT(pos == nullptr);
-    ASSERT(order_mgr.get_open_positions().empty());
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        Position* pos = g_test_om.find_position("TEST");
+        ASSERT(pos == nullptr);
+        ASSERT(g_test_om.get_open_positions().empty());
 
-    // Should have 2 closed positions
-    ASSERT_EQ(order_mgr.get_closed_positions().size(), 2u);
+        // Should have 2 closed positions
+        ASSERT_EQ(g_test_om.get_closed_positions().size(), 2u);
+    }
 
-    db.close();
+    g_test_db.close();
 }
 
 TEST(session_persistence) {
@@ -377,99 +466,118 @@ TEST(market_data_candles_all_timeframes) {
 }
 
 TEST(calculate_sell_quantity_percentages) {
-    Database db;
-    MarketData market;
-    OrderManager order_mgr;
+    // Initialize with WebSocket
+    setup_tradezero_client();
+    ASSERT(g_test_db.init(TEST_DB));
+    g_test_market.set_data_source(DataSourceMode::FILE);
+    g_test_market.set_data_dir(TEST_DATA_DIR);
+    ASSERT(g_test_market.load_symbol("TEST"));
+    reset_global_om();
 
-    ASSERT(db.init(TEST_DB));
-    market.set_data_source(DataSourceMode::FILE);
-    market.set_data_dir(TEST_DATA_DIR);
-    ASSERT(market.load_symbol("TEST"));
-    order_mgr.init(&db, &market);
-    order_mgr.set_tradezero_client(&g_test_tz_client);
-
-    // Buy 400 shares
+    // Get market prices
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
+    ASSERT(g_test_market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
-    order_mgr.buy("TEST", 400, best_ask);
-    process_fills_stub(&order_mgr);
+    // Buy 400 shares
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        g_test_om.buy("TEST", 400, best_ask);
+    }
+    ASSERT(wait_for_pending_count(0));
 
     // Test percentage calculations
-    ASSERT_EQ(order_mgr.calculate_sell_quantity("TEST", 25), 100);   // 25% of 400
-    ASSERT_EQ(order_mgr.calculate_sell_quantity("TEST", 50), 200);   // 50% of 400
-    ASSERT_EQ(order_mgr.calculate_sell_quantity("TEST", 75), 300);   // 75% of 400
-    ASSERT_EQ(order_mgr.calculate_sell_quantity("TEST", 100), 400);  // 100% of 400
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 25), 100);   // 25% of 400
+        ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 50), 200);   // 50% of 400
+        ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 75), 300);   // 75% of 400
+        ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 100), 400);  // 100% of 400
+    }
+
+    // Sell 301 shares to leave 99
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        g_test_om.sell("TEST", 301, best_bid);
+    }
+    ASSERT(wait_for_pending_count(0));
 
     // Test with odd numbers (should round down)
-    order_mgr.sell("TEST", 301, best_bid);  // Leave 99 shares
-    process_fills_stub(&order_mgr);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 50), 49);  // 50% of 99 = 49.5, rounds to 49
+    }
 
-    ASSERT_EQ(order_mgr.calculate_sell_quantity("TEST", 50), 49);  // 50% of 99 = 49.5, rounds to 49
-
-    db.close();
+    g_test_db.close();
 }
 
 TEST(cancel_all_pending_orders) {
-    Database db;
-    MarketData market;
-    OrderManager order_mgr;
+    // Initialize with WebSocket
+    setup_tradezero_client();
+    ASSERT(g_test_db.init(TEST_DB));
+    reset_global_om();
 
-    ASSERT(db.init(TEST_DB));
-    order_mgr.init(&db, &market);
-    order_mgr.set_tradezero_client(&g_test_tz_client);
+    // Place multiple orders (prices below market won't auto-fill)
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        g_test_om.buy("TEST", 100, 90.00f);  // Far below market
+        g_test_om.buy("TEST", 200, 89.00f);
+        g_test_om.buy("TEST", 300, 88.00f);
+        ASSERT_EQ(g_test_om.get_pending_orders().size(), 3u);
+    }
 
-    // Place multiple orders that won't fill (no market data)
-    order_mgr.buy("TEST", 100, 99.00f);  // Below market
-    order_mgr.buy("TEST", 200, 98.00f);
-    order_mgr.buy("TEST", 300, 97.00f);
+    // Cancel all (async)
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        ASSERT(g_test_om.cancel_all_orders(nullptr));
+    }
 
-    ASSERT_EQ(order_mgr.get_pending_orders().size(), 3u);
+    // Wait for all cancel confirmations via WebSocket
+    ASSERT(wait_for_pending_count(0));
 
-    // Cancel all
-    ASSERT(order_mgr.cancel_all_orders(nullptr));
-    ASSERT(order_mgr.get_pending_orders().empty());
-
-    db.close();
+    g_test_db.close();
 }
 
 TEST(position_pnl_calculation) {
-    Database db;
-    MarketData market;
-    OrderManager order_mgr;
+    // Initialize with WebSocket
+    setup_tradezero_client();
+    ASSERT(g_test_db.init(TEST_DB));
+    g_test_market.set_data_source(DataSourceMode::FILE);
+    g_test_market.set_data_dir(TEST_DATA_DIR);
+    ASSERT(g_test_market.load_symbol("TEST"));
+    reset_global_om();
 
-    ASSERT(db.init(TEST_DB));
-    market.set_data_source(DataSourceMode::FILE);
-    market.set_data_dir(TEST_DATA_DIR);
-    ASSERT(market.load_symbol("TEST"));
-    order_mgr.init(&db, &market);
-    order_mgr.set_tradezero_client(&g_test_tz_client);
-
-    // Buy shares
+    // Get market prices
     std::vector<Level2Entry> bids, asks;
     float best_bid = 0, best_ask = 0;
-    ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
+    ASSERT(g_test_market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
-    order_mgr.buy("TEST", 100, best_ask);
-    process_fills_stub(&order_mgr);
+    // Buy shares
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        g_test_om.buy("TEST", 100, best_ask);
+    }
+    ASSERT(wait_for_pending_count(0));
 
-    Position* pos = order_mgr.find_position("TEST");
-    ASSERT(pos != nullptr);
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        Position* pos = g_test_om.find_position("TEST");
+        ASSERT(pos != nullptr);
 
-    // Set current price higher for profit
-    pos->current_price = pos->avg_price + 1.0f;
-    float pnl = pos->unrealized_pnl();
-    ASSERT(pnl > 0);  // Should be profitable
-    ASSERT(pnl > 99.0f && pnl < 101.0f);  // ~$100 profit (100 shares * $1)
+        // Set current price higher for profit
+        pos->current_price = pos->avg_price + 1.0f;
+        float pnl = pos->unrealized_pnl();
+        ASSERT(pnl > 0);  // Should be profitable
+        ASSERT(pnl > 99.0f && pnl < 101.0f);  // ~$100 profit (100 shares * $1)
 
-    // Set current price lower for loss
-    pos->current_price = pos->avg_price - 0.50f;
-    pnl = pos->unrealized_pnl();
-    ASSERT(pnl < 0);  // Should be loss
-    ASSERT(pnl > -51.0f && pnl < -49.0f);  // ~$50 loss (100 shares * $0.50)
+        // Set current price lower for loss
+        pos->current_price = pos->avg_price - 0.50f;
+        pnl = pos->unrealized_pnl();
+        ASSERT(pnl < 0);  // Should be loss
+        ASSERT(pnl > -51.0f && pnl < -49.0f);  // ~$50 loss (100 shares * $0.50)
+    }
 
-    db.close();
+    g_test_db.close();
 }
 
 TEST(time_sales_direction) {

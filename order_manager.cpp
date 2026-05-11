@@ -40,16 +40,42 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
 
     // Place order via TradeZero REST API
     if (m_tradezero_client != nullptr && m_tradezero_client->is_configured()) {
+        // Create local pending order FIRST with temporary client_order_id
+        // This prevents race condition where WebSocket callback creates duplicate order
+        Order order;
+        order.id = m_next_order_id++;
+        safe_strcpy(order.symbol, symbol, sizeof(order.symbol));
+        // Temporary client_order_id - will be updated when server responds
+        std::snprintf(order.client_order_id, sizeof(order.client_order_id), "PENDING_BUY_%lld",
+                     static_cast<long long>(order.id));
+        order.side = OrderSide::BUY;
+        order.quantity = quantity;
+        order.filled = 0;
+        order.price = price;
+        order.status = OrderStatus::PENDING;
+        order.created_at = get_current_timestamp();
+
+        m_pending_orders.push_back(order);
+        int64_t local_order_id = order.id;
+
+        // Now send REST request to broker
         TZResponse resp = m_tradezero_client->place_order(
             symbol, quantity, "buy", "limit", price, 0.0f
         );
 
         if (!resp.success) {
             LOG_E("orders", "TradeZero buy failed: %s", resp.error.c_str());
+            // Remove the pending order we added
+            for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
+                if (it->id == local_order_id) {
+                    m_pending_orders.erase(it);
+                    break;
+                }
+            }
             return -1;
         }
 
-        // Extract clientOrderId from response JSON
+        // Extract clientOrderId from response JSON and update our local order
         char client_order_id[64];
         client_order_id[0] = '\0';
         try {
@@ -69,33 +95,38 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
             LOG_W("orders", "Server didn't return clientOrderId, generated: %s", client_order_id);
         }
 
-        // Create local pending order for immediate UI feedback
-        Order order;
-        order.id = m_next_order_id++;
-        safe_strcpy(order.symbol, symbol, sizeof(order.symbol));
-        safe_strcpy(order.client_order_id, client_order_id, sizeof(order.client_order_id));
-        order.side = OrderSide::BUY;
-        order.quantity = quantity;
-        order.filled = 0;
-        order.price = price;
-        order.status = OrderStatus::PENDING;
-        order.created_at = get_current_timestamp();
-
-        m_pending_orders.push_back(order);
+        // Update the local order with the real client_order_id
+        for (auto& o : m_pending_orders) {
+            if (o.id == local_order_id) {
+                safe_strcpy(o.client_order_id, client_order_id, sizeof(o.client_order_id));
+                break;
+            }
+        }
 
         LOG_I("orders", "BUY order placed via TradeZero: id=%lld %s qty=%d @ %.2f",
-              static_cast<long long>(order.id), order.symbol, quantity, static_cast<double>(price));
+              static_cast<long long>(local_order_id), symbol, quantity, static_cast<double>(price));
 
         // Save to database
         if (m_db != nullptr && m_db->is_open()) {
-            m_db->save_order(order);
+            // Find the updated order to save
+            for (const auto& o : m_pending_orders) {
+                if (o.id == local_order_id) {
+                    m_db->save_order(o);
+                    break;
+                }
+            }
         }
 
         if (m_order_callback) {
-            m_order_callback(order);
+            for (const auto& o : m_pending_orders) {
+                if (o.id == local_order_id) {
+                    m_order_callback(o);
+                    break;
+                }
+            }
         }
 
-        return order.id;
+        return local_order_id;
     } else {
         LOG_E("orders", "TradeZero client not configured");
         return -1;
@@ -116,12 +147,36 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
 
     // Place order via TradeZero REST API
     if (m_tradezero_client != nullptr && m_tradezero_client->is_configured()) {
+        // Create local pending order FIRST with temporary client_order_id
+        Order order;
+        order.id = m_next_order_id++;
+        safe_strcpy(order.symbol, symbol, sizeof(order.symbol));
+        std::snprintf(order.client_order_id, sizeof(order.client_order_id), "PENDING_SELL_%lld",
+                     static_cast<long long>(order.id));
+        order.side = OrderSide::SELL;
+        order.quantity = quantity;
+        order.filled = 0;
+        order.price = price;
+        order.status = OrderStatus::PENDING;
+        order.created_at = get_current_timestamp();
+
+        m_pending_orders.push_back(order);
+        int64_t local_order_id = order.id;
+
+        // Now send REST request to broker
         TZResponse resp = m_tradezero_client->place_order(
             symbol, quantity, "sell", "limit", price, 0.0f
         );
 
         if (!resp.success) {
             LOG_E("orders", "TradeZero sell failed: %s", resp.error.c_str());
+            // Remove the pending order we added
+            for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
+                if (it->id == local_order_id) {
+                    m_pending_orders.erase(it);
+                    break;
+                }
+            }
             return -1;
         }
 
@@ -145,33 +200,37 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
             LOG_W("orders", "Server didn't return clientOrderId, generated: %s", client_order_id);
         }
 
-        // Create local pending order for immediate UI feedback
-        Order order;
-        order.id = m_next_order_id++;
-        safe_strcpy(order.symbol, symbol, sizeof(order.symbol));
-        safe_strcpy(order.client_order_id, client_order_id, sizeof(order.client_order_id));
-        order.side = OrderSide::SELL;
-        order.quantity = quantity;
-        order.filled = 0;
-        order.price = price;
-        order.status = OrderStatus::PENDING;
-        order.created_at = get_current_timestamp();
-
-        m_pending_orders.push_back(order);
+        // Update the local order with the real client_order_id
+        for (auto& o : m_pending_orders) {
+            if (o.id == local_order_id) {
+                safe_strcpy(o.client_order_id, client_order_id, sizeof(o.client_order_id));
+                break;
+            }
+        }
 
         LOG_I("orders", "SELL order placed via TradeZero: id=%lld %s qty=%d @ %.2f",
-              static_cast<long long>(order.id), order.symbol, quantity, static_cast<double>(price));
+              static_cast<long long>(local_order_id), symbol, quantity, static_cast<double>(price));
 
         // Save to database
         if (m_db != nullptr && m_db->is_open()) {
-            m_db->save_order(order);
+            for (const auto& o : m_pending_orders) {
+                if (o.id == local_order_id) {
+                    m_db->save_order(o);
+                    break;
+                }
+            }
         }
 
         if (m_order_callback) {
-            m_order_callback(order);
+            for (const auto& o : m_pending_orders) {
+                if (o.id == local_order_id) {
+                    m_order_callback(o);
+                    break;
+                }
+            }
         }
 
-        return order.id;
+        return local_order_id;
     } else {
         LOG_E("orders", "TradeZero client not configured");
         return -1;
@@ -436,6 +495,28 @@ Order* OrderManager::find_order_by_client_id(const char* client_order_id) {
 void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
     // Find order by client_order_id
     Order* order = find_order_by_client_id(update.client_order_id);
+
+    // If not found, look for a pending order with temporary PENDING_ prefix
+    // This handles the case where WebSocket callback runs before buy()/sell()
+    // has received the server's client_order_id
+    if (order == nullptr) {
+        OrderSide expected_side = (std::strcmp(update.side, "Buy") == 0) ? OrderSide::BUY : OrderSide::SELL;
+        for (auto& o : m_pending_orders) {
+            // Match on symbol, quantity, side, and pending status with temp ID
+            if (std::strcmp(o.symbol, update.symbol) == 0 &&
+                o.quantity == update.order_quantity &&
+                o.side == expected_side &&
+                o.status == OrderStatus::PENDING &&
+                std::strncmp(o.client_order_id, "PENDING_", 8) == 0) {
+                // Found matching pending order - update its client_order_id
+                safe_strcpy(o.client_order_id, update.client_order_id, sizeof(o.client_order_id));
+                order = &o;
+                LOG_I("orders", "Matched pending order id=%lld to %s",
+                      static_cast<long long>(o.id), update.client_order_id);
+                break;
+            }
+        }
+    }
 
     if (order == nullptr) {
         // Order not in local state (e.g., placed in another app)

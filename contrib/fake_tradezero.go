@@ -146,8 +146,8 @@ func simulateFill(orderID, side string, limitPrice float64, qty int) {
 	// Small delay to simulate market processing
 	time.Sleep(50 * time.Millisecond)
 
-	// Mock market prices
-	const mockBid = 99.95
+	// Mock market prices (matching test data in test_integration.cpp)
+	const mockBid = 100.00
 	const mockAsk = 100.05
 
 	shouldFill := false
@@ -273,7 +273,8 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 	ordersMu.Lock()
 	oldOrderCount := len(orders)
 	orders = nil
-	nextOrderID = 1000
+	// Don't reset nextOrderID - keep incrementing to avoid event confusion between tests
+	// nextOrderID = 1000
 	ordersMu.Unlock()
 
 	logInfo("REST: POST reset - cleared %d orders", oldOrderCount)
