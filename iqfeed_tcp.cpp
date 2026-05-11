@@ -687,6 +687,16 @@ void IQFeedLevel1::stream_thread() {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_log).count();
         if (elapsed >= 5) {
             LOG_I("perf", "L1 thread: %d loops, %d msgs in %lld sec", loop_count, total_msgs, static_cast<long long>(elapsed));
+
+            // BUSY LOOP DETECTOR: >1000 loops/sec with 0 messages = bug
+            // Normal: ~1 loop/sec (1000ms poll timeout), or many loops WITH messages
+            int loops_per_sec = loop_count / (elapsed > 0 ? static_cast<int>(elapsed) : 1);
+            if (loops_per_sec > 1000 && total_msgs == 0) {
+                LOG_E("iqfeed", "L1 BUSY LOOP DETECTED: %d loops/sec with 0 msgs - socket=%d",
+                      loops_per_sec, m_socket.load());
+                std::abort();
+            }
+
             loop_count = 0;
             total_msgs = 0;
             last_log = now;
@@ -706,7 +716,11 @@ void IQFeedLevel1::stream_thread() {
                 }
             }
         } else if (result == -1) {
-            // Error/disconnect - keep trying to reconnect
+            // Error/disconnect - close socket first, then try to reconnect
+            if (m_socket >= 0) {
+                close(m_socket);
+                m_socket = -1;
+            }
             while (m_running && m_socket < 0) {
                 safe_sleep_s(2);
                 if (m_running) {
@@ -1006,6 +1020,16 @@ void IQFeedLevel2::stream_thread() {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_log).count();
         if (elapsed >= 5) {
             LOG_I("perf", "L2 thread: %d loops, %d msgs in %lld sec", loop_count, total_msgs, static_cast<long long>(elapsed));
+
+            // BUSY LOOP DETECTOR: >1000 loops/sec with 0 messages = bug
+            // Normal: ~1 loop/sec (1000ms poll timeout), or many loops WITH messages
+            int loops_per_sec = loop_count / (elapsed > 0 ? static_cast<int>(elapsed) : 1);
+            if (loops_per_sec > 1000 && total_msgs == 0) {
+                LOG_E("iqfeed", "L2 BUSY LOOP DETECTED: %d loops/sec with 0 msgs - socket=%d",
+                      loops_per_sec, m_socket.load());
+                std::abort();
+            }
+
             loop_count = 0;
             total_msgs = 0;
             last_log = now;
@@ -1025,7 +1049,11 @@ void IQFeedLevel2::stream_thread() {
                 }
             }
         } else if (result == -1) {
-            // Error/disconnect - keep trying to reconnect
+            // Error/disconnect - close socket first, then try to reconnect
+            if (m_socket >= 0) {
+                close(m_socket);
+                m_socket = -1;
+            }
             while (m_running && m_socket < 0) {
                 safe_sleep_s(2);
                 if (m_running) {
