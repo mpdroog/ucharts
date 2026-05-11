@@ -16,25 +16,7 @@
 // Test helpers
 // ============================================================================
 
-static int g_tests_run = 0;
-static int g_tests_passed = 0;
-
-#define TEST(name) static void test_##name()
-#define RUN_TEST(name) do { \
-    g_tests_run++; \
-    std::printf("Running %s... ", #name); \
-    std::fflush(stdout); \
-    test_##name(); \
-    g_tests_passed++; \
-    std::printf("PASSED\n"); \
-} while(0)
-
-#define ASSERT_TRUE(cond) do { \
-    if (!(cond)) { \
-        std::printf("FAILED: %s is false (line %d)\n", #cond, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
+#include "test_common.h"
 
 // ============================================================================
 // Mock callback that simulates work and may access shared state
@@ -408,9 +390,8 @@ TEST(global_instance_crash_repro) {
 // Main
 // ============================================================================
 
-int main() {
-    std::printf("Running threading stress tests...\n");
-    std::printf("(Run with 'make tsan' to use ThreadSanitizer)\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     // Run crash repro tests FIRST to catch the issue
     RUN_TEST(market_data_load_symbol);
@@ -424,14 +405,13 @@ int main() {
     RUN_TEST(concurrent_callback_registration);
     RUN_TEST(concurrent_watch_unwatch);
 
-    std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
+    test_summary();
 
     // Clean exit
     get_iqfeed_lookup().disconnect();
     get_iqfeed_level1().disconnect();
     get_iqfeed_level2().disconnect();
 
-    std::printf("Clean exit.\n");
     std::fflush(stdout);
     _Exit(0);
 }

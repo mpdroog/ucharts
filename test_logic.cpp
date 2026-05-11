@@ -113,38 +113,7 @@ static bool ParseCSVLine(const char* line, Candle& c) {
 // Test helpers
 // ============================================================================
 
-static int g_tests_run = 0;
-static int g_tests_passed = 0;
-
-#define TEST(name) static void test_##name()
-#define RUN_TEST(name) do { \
-    g_tests_run++; \
-    std::printf("Running %s... ", #name); \
-    test_##name(); \
-    g_tests_passed++; \
-    std::printf("PASSED\n"); \
-} while(0)
-
-#define ASSERT_EQ(a, b) do { \
-    if ((a) != (b)) { \
-        std::printf("FAILED: %s != %s (line %d)\n", #a, #b, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_FLOAT_EQ(a, b, eps) do { \
-    if (std::fabs((a) - (b)) > (eps)) { \
-        std::printf("FAILED: %s (%.4f) != %s (%.4f) (line %d)\n", #a, (double)(a), #b, (double)(b), __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_TRUE(cond) do { \
-    if (!(cond)) { \
-        std::printf("FAILED: %s is false (line %d)\n", #cond, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
+#include "test_common.h"
 
 // ============================================================================
 // Tests
@@ -304,8 +273,8 @@ TEST(candle_bullish_bearish) {
 // Main
 // ============================================================================
 
-int main() {
-    std::printf("Running ucharts logic tests...\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     RUN_TEST(csv_parse_new_format);
     RUN_TEST(csv_parse_old_format);
@@ -319,6 +288,6 @@ int main() {
     RUN_TEST(bollinger_with_variance);
     RUN_TEST(candle_bullish_bearish);
 
-    std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
+    test_summary();
     return 0;
 }

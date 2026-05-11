@@ -4,25 +4,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cassert>
+#include <cmath>
 #include <atomic>
+#include "test_common.h"
 #include "tradezero_websocket.h"
 #include "types.h"
-
-// Test helper macros
-#define TEST_ASSERT(condition, message) \
-    do { \
-        if (!(condition)) { \
-            std::fprintf(stderr, "FAIL: %s (line %d): %s\n", __func__, __LINE__, message); \
-            return false; \
-        } \
-    } while(0)
-
-#define TEST_PASS() \
-    do { \
-        std::printf("PASS: %s\n", __func__); \
-        return true; \
-    } while(0)
 
 // ============================================================================
 // Mock Data Structures for Testing
@@ -53,74 +39,59 @@ void reset_test_state() {
 // Tests for Data Structures
 // ============================================================================
 
-bool test_pnl_snapshot_initialization() {
+TEST(pnl_snapshot_initialization) {
     TZPnLSnapshot snapshot;
-
-    TEST_ASSERT(snapshot.account_value == 0.0f, "account_value should be 0");
-    TEST_ASSERT(snapshot.available_cash == 0.0f, "available_cash should be 0");
-    TEST_ASSERT(snapshot.buying_power == 0.0f, "buying_power should be 0");
-    TEST_ASSERT(snapshot.day_pnl == 0.0f, "day_pnl should be 0");
-    TEST_ASSERT(snapshot.positions.size() == 0, "positions should be empty");
-    TEST_PASS();
+    ASSERT_FLOAT_EQ(snapshot.account_value, 0.0f, 0.01f);
+    ASSERT_FLOAT_EQ(snapshot.available_cash, 0.0f, 0.01f);
+    ASSERT_FLOAT_EQ(snapshot.buying_power, 0.0f, 0.01f);
+    ASSERT_FLOAT_EQ(snapshot.day_pnl, 0.0f, 0.01f);
+    ASSERT_TRUE(snapshot.positions.size() == 0);
 }
 
-bool test_agg_update_initialization() {
+TEST(agg_update_initialization) {
     TZAggUpdate update;
-
-    TEST_ASSERT(update.account_value == 0.0f, "account_value should be 0");
-    TEST_ASSERT(update.day_pnl == 0.0f, "day_pnl should be 0");
-    TEST_ASSERT(update.exposure == 0.0f, "exposure should be 0");
-    TEST_PASS();
+    ASSERT_FLOAT_EQ(update.account_value, 0.0f, 0.01f);
+    ASSERT_FLOAT_EQ(update.day_pnl, 0.0f, 0.01f);
+    ASSERT_FLOAT_EQ(update.exposure, 0.0f, 0.01f);
 }
 
-bool test_position_pnl_initialization() {
+TEST(position_pnl_initialization) {
     TZPositionPnL pos;
-
-    TEST_ASSERT(pos.position_id[0] == '\0', "position_id should be empty");
-    TEST_ASSERT(pos.symbol[0] == '\0', "symbol should be empty");
-    TEST_ASSERT(pos.unrealized_pnl == 0.0f, "unrealized_pnl should be 0");
-    TEST_ASSERT(pos.realized_pnl == 0.0f, "realized_pnl should be 0");
-    TEST_PASS();
+    ASSERT_TRUE(pos.position_id[0] == '\0');
+    ASSERT_TRUE(pos.symbol[0] == '\0');
+    ASSERT_FLOAT_EQ(pos.unrealized_pnl, 0.0f, 0.01f);
+    ASSERT_FLOAT_EQ(pos.realized_pnl, 0.0f, 0.01f);
 }
 
-bool test_order_update_initialization() {
+TEST(order_update_initialization) {
     TZOrderUpdate order;
-
-    TEST_ASSERT(order.account_id[0] == '\0', "account_id should be empty");
-    TEST_ASSERT(order.client_order_id[0] == '\0', "client_order_id should be empty");
-    TEST_ASSERT(order.symbol[0] == '\0', "symbol should be empty");
-    TEST_ASSERT(order.order_quantity == 0, "order_quantity should be 0");
-    TEST_ASSERT(order.executed == 0, "executed should be 0");
-    TEST_PASS();
+    ASSERT_TRUE(order.account_id[0] == '\0');
+    ASSERT_TRUE(order.client_order_id[0] == '\0');
+    ASSERT_TRUE(order.symbol[0] == '\0');
+    ASSERT_TRUE(order.order_quantity == 0);
+    ASSERT_TRUE(order.executed == 0);
 }
 
-bool test_position_update_initialization() {
+TEST(position_update_initialization) {
     TZPositionUpdate pos;
-
-    TEST_ASSERT(pos.id[0] == '\0', "id should be empty");
-    TEST_ASSERT(pos.symbol[0] == '\0', "symbol should be empty");
-    TEST_ASSERT(pos.shares == 0.0f, "shares should be 0");
-    TEST_ASSERT(pos.price_avg == 0.0f, "price_avg should be 0");
-    TEST_PASS();
+    ASSERT_TRUE(pos.id[0] == '\0');
+    ASSERT_TRUE(pos.symbol[0] == '\0');
+    ASSERT_FLOAT_EQ(pos.shares, 0.0f, 0.01f);
+    ASSERT_FLOAT_EQ(pos.price_avg, 0.0f, 0.01f);
 }
 
-bool test_websocket_initialization() {
+TEST(websocket_initialization) {
     TradeZeroWebSocket ws;
-
-    TEST_ASSERT(!ws.is_connected(), "WebSocket should not be connected initially");
-    TEST_PASS();
+    ASSERT_TRUE(!ws.is_connected());
 }
 
-bool test_websocket_credentials() {
+TEST(websocket_credentials) {
     TradeZeroWebSocket ws;
-
     ws.set_credentials("test_key", "test_secret", "test_account");
-
     // Credentials are set (no public getter to verify, but no crash is good)
-    TEST_PASS();
 }
 
-bool test_websocket_callbacks() {
+TEST(websocket_callbacks) {
     TradeZeroWebSocket ws;
     reset_test_state();
 
@@ -151,10 +122,9 @@ bool test_websocket_callbacks() {
     });
 
     // Callbacks are set (no public way to verify, but no crash is good)
-    TEST_PASS();
 }
 
-bool test_pnl_snapshot_copy() {
+TEST(pnl_snapshot_copy) {
     TZPnLSnapshot snapshot1;
     snapshot1.account_value = 50000.0f;
     snapshot1.day_pnl = 500.0f;
@@ -162,13 +132,12 @@ bool test_pnl_snapshot_copy() {
 
     TZPnLSnapshot snapshot2 = snapshot1;
 
-    TEST_ASSERT(snapshot2.account_value == 50000.0f, "account_value should be copied");
-    TEST_ASSERT(snapshot2.day_pnl == 500.0f, "day_pnl should be copied");
-    TEST_ASSERT(snapshot2.buying_power == 100000.0f, "buying_power should be copied");
-    TEST_PASS();
+    ASSERT_FLOAT_EQ(snapshot2.account_value, 50000.0f, 0.01f);
+    ASSERT_FLOAT_EQ(snapshot2.day_pnl, 500.0f, 0.01f);
+    ASSERT_FLOAT_EQ(snapshot2.buying_power, 100000.0f, 0.01f);
 }
 
-bool test_order_update_copy() {
+TEST(order_update_copy) {
     TZOrderUpdate order1;
     std::strncpy(order1.symbol, "AAPL", sizeof(order1.symbol));
     std::strncpy(order1.client_order_id, "order123", sizeof(order1.client_order_id));
@@ -177,14 +146,13 @@ bool test_order_update_copy() {
 
     TZOrderUpdate order2 = order1;
 
-    TEST_ASSERT(std::strcmp(order2.symbol, "AAPL") == 0, "symbol should be copied");
-    TEST_ASSERT(std::strcmp(order2.client_order_id, "order123") == 0, "client_order_id should be copied");
-    TEST_ASSERT(order2.order_quantity == 100, "order_quantity should be copied");
-    TEST_ASSERT(order2.executed == 50, "executed should be copied");
-    TEST_PASS();
+    ASSERT_STREQ(order2.symbol, "AAPL");
+    ASSERT_STREQ(order2.client_order_id, "order123");
+    ASSERT_TRUE(order2.order_quantity == 100);
+    ASSERT_TRUE(order2.executed == 50);
 }
 
-bool test_position_update_copy() {
+TEST(position_update_copy) {
     TZPositionUpdate pos1;
     std::strncpy(pos1.symbol, "TSLA", sizeof(pos1.symbol));
     pos1.shares = 100.0f;
@@ -192,13 +160,12 @@ bool test_position_update_copy() {
 
     TZPositionUpdate pos2 = pos1;
 
-    TEST_ASSERT(std::strcmp(pos2.symbol, "TSLA") == 0, "symbol should be copied");
-    TEST_ASSERT(pos2.shares == 100.0f, "shares should be copied");
-    TEST_ASSERT(pos2.price_avg == 200.50f, "price_avg should be copied");
-    TEST_PASS();
+    ASSERT_STREQ(pos2.symbol, "TSLA");
+    ASSERT_FLOAT_EQ(pos2.shares, 100.0f, 0.01f);
+    ASSERT_FLOAT_EQ(pos2.price_avg, 200.50f, 0.01f);
 }
 
-bool test_pnl_snapshot_with_positions() {
+TEST(pnl_snapshot_with_positions) {
     TZPnLSnapshot snapshot;
     snapshot.account_value = 100000.0f;
 
@@ -213,29 +180,27 @@ bool test_pnl_snapshot_with_positions() {
     snapshot.positions.push_back(pos1);
     snapshot.positions.push_back(pos2);
 
-    TEST_ASSERT(snapshot.positions.size() == 2, "Should have 2 positions");
-    TEST_ASSERT(std::strcmp(snapshot.positions[0].symbol, "AAPL") == 0, "First position should be AAPL");
-    TEST_ASSERT(std::strcmp(snapshot.positions[1].symbol, "TSLA") == 0, "Second position should be TSLA");
-    TEST_ASSERT(snapshot.positions[0].unrealized_pnl == 500.0f, "AAPL P&L should be 500");
-    TEST_ASSERT(snapshot.positions[1].unrealized_pnl == -200.0f, "TSLA P&L should be -200");
-    TEST_PASS();
+    ASSERT_TRUE(snapshot.positions.size() == 2);
+    ASSERT_STREQ(snapshot.positions[0].symbol, "AAPL");
+    ASSERT_STREQ(snapshot.positions[1].symbol, "TSLA");
+    ASSERT_FLOAT_EQ(snapshot.positions[0].unrealized_pnl, 500.0f, 0.01f);
+    ASSERT_FLOAT_EQ(snapshot.positions[1].unrealized_pnl, -200.0f, 0.01f);
 }
 
-bool test_stream_enum_values() {
+TEST(stream_enum_values) {
     TZStream pnl = TZStream::PNL;
     TZStream portfolio = TZStream::PORTFOLIO;
 
-    TEST_ASSERT(pnl == TZStream::PNL, "PNL stream should match");
-    TEST_ASSERT(portfolio == TZStream::PORTFOLIO, "PORTFOLIO stream should match");
-    TEST_ASSERT(pnl != portfolio, "Streams should be different");
-    TEST_PASS();
+    ASSERT_TRUE(pnl == TZStream::PNL);
+    ASSERT_TRUE(portfolio == TZStream::PORTFOLIO);
+    ASSERT_TRUE(pnl != portfolio);
 }
 
 // ============================================================================
 // JSON Parsing Tests (using handle_message)
 // ============================================================================
 
-bool test_parse_pnl_snapshot_json() {
+TEST(parse_pnl_snapshot_json) {
     TradeZeroWebSocket ws;
     reset_test_state();
 
@@ -273,18 +238,17 @@ bool test_parse_pnl_snapshot_json() {
 
     ws.handle_message(json);
 
-    TEST_ASSERT(g_pnl_snapshot_called, "P&L snapshot callback should be called");
-    TEST_ASSERT(g_last_pnl_snapshot.account_value == 50000.50f, "account_value should be parsed");
-    TEST_ASSERT(g_last_pnl_snapshot.available_cash == 25000.25f, "available_cash should be parsed");
-    TEST_ASSERT(g_last_pnl_snapshot.day_pnl == 201.00f, "day_pnl should be parsed");
-    TEST_ASSERT(g_last_pnl_snapshot.buying_power == 200002.0f, "buying_power should be calculated");
-    TEST_ASSERT(g_last_pnl_snapshot.positions.size() == 1, "Should parse 1 position");
-    TEST_ASSERT(std::strcmp(g_last_pnl_snapshot.positions[0].symbol, "AAPL") == 0, "Position symbol should be AAPL");
-    TEST_ASSERT(g_last_pnl_snapshot.positions[0].unrealized_pnl == 500.0f, "Position unrealized P&L should be parsed");
-    TEST_PASS();
+    ASSERT_TRUE(g_pnl_snapshot_called);
+    ASSERT_FLOAT_EQ(g_last_pnl_snapshot.account_value, 50000.50f, 0.01f);
+    ASSERT_FLOAT_EQ(g_last_pnl_snapshot.available_cash, 25000.25f, 0.01f);
+    ASSERT_FLOAT_EQ(g_last_pnl_snapshot.day_pnl, 201.00f, 0.01f);
+    ASSERT_FLOAT_EQ(g_last_pnl_snapshot.buying_power, 200002.0f, 1.0f);
+    ASSERT_TRUE(g_last_pnl_snapshot.positions.size() == 1);
+    ASSERT_STREQ(g_last_pnl_snapshot.positions[0].symbol, "AAPL");
+    ASSERT_FLOAT_EQ(g_last_pnl_snapshot.positions[0].unrealized_pnl, 500.0f, 0.01f);
 }
 
-bool test_parse_agg_update_json() {
+TEST(parse_agg_update_json) {
     TradeZeroWebSocket ws;
     reset_test_state();
 
@@ -305,15 +269,14 @@ bool test_parse_agg_update_json() {
 
     ws.handle_message(json);
 
-    TEST_ASSERT(g_agg_update_called, "Aggregate update callback should be called");
-    TEST_ASSERT(g_last_agg_update.account_value == 51000.75f, "account_value should be parsed");
-    TEST_ASSERT(g_last_agg_update.exposure == 15000.0f, "exposure should be parsed");
-    TEST_ASSERT(g_last_agg_update.day_pnl == 225.75f, "day_pnl should be parsed");
-    TEST_ASSERT(g_last_agg_update.equity_ratio == 0.85f, "equity_ratio should be parsed");
-    TEST_PASS();
+    ASSERT_TRUE(g_agg_update_called);
+    ASSERT_FLOAT_EQ(g_last_agg_update.account_value, 51000.75f, 0.01f);
+    ASSERT_FLOAT_EQ(g_last_agg_update.exposure, 15000.0f, 0.01f);
+    ASSERT_FLOAT_EQ(g_last_agg_update.day_pnl, 225.75f, 0.01f);
+    ASSERT_FLOAT_EQ(g_last_agg_update.equity_ratio, 0.85f, 0.01f);
 }
 
-bool test_parse_position_pnl_json() {
+TEST(parse_position_pnl_json) {
     TradeZeroWebSocket ws;
     reset_test_state();
 
@@ -339,15 +302,14 @@ bool test_parse_position_pnl_json() {
 
     ws.handle_message(json);
 
-    TEST_ASSERT(g_position_pnl_called, "Position P&L callback should be called");
-    TEST_ASSERT(std::strcmp(g_last_position_pnl.symbol, "TSLA") == 0, "symbol should be parsed");
-    TEST_ASSERT(std::strcmp(g_last_position_pnl.position_id, "pos456") == 0, "position_id should be parsed");
-    TEST_ASSERT(g_last_position_pnl.unrealized_pnl == -200.0f, "unrealized_pnl should be parsed");
-    TEST_ASSERT(g_last_position_pnl.day_unrealized_pnl == -50.0f, "day_unrealized_pnl should be parsed");
-    TEST_PASS();
+    ASSERT_TRUE(g_position_pnl_called);
+    ASSERT_STREQ(g_last_position_pnl.symbol, "TSLA");
+    ASSERT_STREQ(g_last_position_pnl.position_id, "pos456");
+    ASSERT_FLOAT_EQ(g_last_position_pnl.unrealized_pnl, -200.0f, 0.01f);
+    ASSERT_FLOAT_EQ(g_last_position_pnl.day_unrealized_pnl, -50.0f, 0.01f);
 }
 
-bool test_parse_order_update_json() {
+TEST(parse_order_update_json) {
     TradeZeroWebSocket ws;
     reset_test_state();
 
@@ -377,18 +339,17 @@ bool test_parse_order_update_json() {
 
     ws.handle_message(json);
 
-    TEST_ASSERT(g_order_called, "Order callback should be called");
-    TEST_ASSERT(std::strcmp(g_last_order.symbol, "NVDA") == 0, "symbol should be parsed");
-    TEST_ASSERT(std::strcmp(g_last_order.client_order_id, "order789") == 0, "client_order_id should be parsed");
-    TEST_ASSERT(std::strcmp(g_last_order.side, "Buy") == 0, "side should be parsed");
-    TEST_ASSERT(std::strcmp(g_last_order.order_status, "Filled") == 0, "orderStatus should be parsed");
-    TEST_ASSERT(g_last_order.order_quantity == 100, "orderQuantity should be parsed");
-    TEST_ASSERT(g_last_order.executed == 100, "executed should be parsed");
-    TEST_ASSERT(g_last_order.limit_price == 450.50f, "limitPrice should be parsed");
-    TEST_PASS();
+    ASSERT_TRUE(g_order_called);
+    ASSERT_STREQ(g_last_order.symbol, "NVDA");
+    ASSERT_STREQ(g_last_order.client_order_id, "order789");
+    ASSERT_STREQ(g_last_order.side, "Buy");
+    ASSERT_STREQ(g_last_order.order_status, "Filled");
+    ASSERT_TRUE(g_last_order.order_quantity == 100);
+    ASSERT_TRUE(g_last_order.executed == 100);
+    ASSERT_FLOAT_EQ(g_last_order.limit_price, 450.50f, 0.01f);
 }
 
-bool test_parse_position_update_json() {
+TEST(parse_position_update_json) {
     TradeZeroWebSocket ws;
     reset_test_state();
 
@@ -414,16 +375,15 @@ bool test_parse_position_update_json() {
 
     ws.handle_message(json);
 
-    TEST_ASSERT(g_position_called, "Position callback should be called");
-    TEST_ASSERT(std::strcmp(g_last_position.symbol, "AMD") == 0, "symbol should be parsed");
-    TEST_ASSERT(std::strcmp(g_last_position.id, "pos789") == 0, "id should be parsed");
-    TEST_ASSERT(g_last_position.shares == 200.0f, "shares should be parsed");
-    TEST_ASSERT(g_last_position.price_avg == 120.50f, "priceAvg should be parsed");
-    TEST_ASSERT(std::strcmp(g_last_position.side, "Long") == 0, "side should be parsed");
-    TEST_PASS();
+    ASSERT_TRUE(g_position_called);
+    ASSERT_STREQ(g_last_position.symbol, "AMD");
+    ASSERT_STREQ(g_last_position.id, "pos789");
+    ASSERT_FLOAT_EQ(g_last_position.shares, 200.0f, 0.01f);
+    ASSERT_FLOAT_EQ(g_last_position.price_avg, 120.50f, 0.01f);
+    ASSERT_STREQ(g_last_position.side, "Long");
 }
 
-bool test_parse_invalid_json() {
+TEST(parse_invalid_json) {
     TradeZeroWebSocket ws;
     reset_test_state();
 
@@ -436,11 +396,10 @@ bool test_parse_invalid_json() {
     const char* invalid_json = "{invalid json here";
     ws.handle_message(invalid_json);
 
-    TEST_ASSERT(!g_order_called, "Callback should not be called for invalid JSON");
-    TEST_PASS();
+    ASSERT_TRUE(!g_order_called);
 }
 
-bool test_parse_missing_fields() {
+TEST(parse_missing_fields) {
     TradeZeroWebSocket ws;
     reset_test_state();
 
@@ -457,92 +416,81 @@ bool test_parse_missing_fields() {
 
     ws.handle_message(json);
 
-    TEST_ASSERT(g_order_called, "Callback should be called even with missing fields");
-    TEST_ASSERT(std::strcmp(g_last_order.symbol, "AAPL") == 0, "symbol should still be parsed");
-    TEST_ASSERT(g_last_order.order_quantity == 0, "Missing fields should have default values");
-    TEST_PASS();
+    ASSERT_TRUE(g_order_called);
+    ASSERT_STREQ(g_last_order.symbol, "AAPL");
+    ASSERT_TRUE(g_last_order.order_quantity == 0);
 }
 
 // ============================================================================
 // Message Queue Tests
 // ============================================================================
 
-bool test_message_queue() {
+TEST(message_queue) {
     TradeZeroWebSocket ws;
 
-    TEST_ASSERT(!ws.has_queued_messages(), "Queue should be empty initially");
+    ASSERT_TRUE(!ws.has_queued_messages());
 
     ws.queue_message("test message 1");
-    TEST_ASSERT(ws.has_queued_messages(), "Queue should have messages after queueing");
+    ASSERT_TRUE(ws.has_queued_messages());
 
     ws.queue_message("test message 2");
     ws.queue_message("test message 3");
 
     std::string msg1 = ws.dequeue_message();
-    TEST_ASSERT(msg1 == "test message 1", "First message should be dequeued first (FIFO)");
+    ASSERT_STREQ(msg1.c_str(), "test message 1");
 
     std::string msg2 = ws.dequeue_message();
-    TEST_ASSERT(msg2 == "test message 2", "Second message should be dequeued second");
+    ASSERT_STREQ(msg2.c_str(), "test message 2");
 
-    TEST_ASSERT(ws.has_queued_messages(), "Queue should still have one message");
+    ASSERT_TRUE(ws.has_queued_messages());
 
     std::string msg3 = ws.dequeue_message();
-    TEST_ASSERT(msg3 == "test message 3", "Third message should be dequeued third");
+    ASSERT_STREQ(msg3.c_str(), "test message 3");
 
-    TEST_ASSERT(!ws.has_queued_messages(), "Queue should be empty after dequeueing all");
+    ASSERT_TRUE(!ws.has_queued_messages());
 
     std::string empty = ws.dequeue_message();
-    TEST_ASSERT(empty == "", "Dequeueing from empty queue should return empty string");
-
-    TEST_PASS();
+    ASSERT_STREQ(empty.c_str(), "");
 }
 
 // ============================================================================
-// Main Test Runner
+// Main
 // ============================================================================
 
-int main() {
-    int passed = 0;
-    int failed = 0;
-
-    std::printf("Running TradeZero WebSocket Tests...\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     // Data structure initialization tests
-    if (test_pnl_snapshot_initialization()) passed++; else failed++;
-    if (test_agg_update_initialization()) passed++; else failed++;
-    if (test_position_pnl_initialization()) passed++; else failed++;
-    if (test_order_update_initialization()) passed++; else failed++;
-    if (test_position_update_initialization()) passed++; else failed++;
+    RUN_TEST(pnl_snapshot_initialization);
+    RUN_TEST(agg_update_initialization);
+    RUN_TEST(position_pnl_initialization);
+    RUN_TEST(order_update_initialization);
+    RUN_TEST(position_update_initialization);
 
     // WebSocket client tests
-    if (test_websocket_initialization()) passed++; else failed++;
-    if (test_websocket_credentials()) passed++; else failed++;
-    if (test_websocket_callbacks()) passed++; else failed++;
+    RUN_TEST(websocket_initialization);
+    RUN_TEST(websocket_credentials);
+    RUN_TEST(websocket_callbacks);
 
     // Copy and data tests
-    if (test_pnl_snapshot_copy()) passed++; else failed++;
-    if (test_order_update_copy()) passed++; else failed++;
-    if (test_position_update_copy()) passed++; else failed++;
-    if (test_pnl_snapshot_with_positions()) passed++; else failed++;
-    if (test_stream_enum_values()) passed++; else failed++;
+    RUN_TEST(pnl_snapshot_copy);
+    RUN_TEST(order_update_copy);
+    RUN_TEST(position_update_copy);
+    RUN_TEST(pnl_snapshot_with_positions);
+    RUN_TEST(stream_enum_values);
 
     // JSON parsing tests
-    std::printf("\n--- JSON Parsing Tests ---\n");
-    if (test_parse_pnl_snapshot_json()) passed++; else failed++;
-    if (test_parse_agg_update_json()) passed++; else failed++;
-    if (test_parse_position_pnl_json()) passed++; else failed++;
-    if (test_parse_order_update_json()) passed++; else failed++;
-    if (test_parse_position_update_json()) passed++; else failed++;
-    if (test_parse_invalid_json()) passed++; else failed++;
-    if (test_parse_missing_fields()) passed++; else failed++;
+    RUN_TEST(parse_pnl_snapshot_json);
+    RUN_TEST(parse_agg_update_json);
+    RUN_TEST(parse_position_pnl_json);
+    RUN_TEST(parse_order_update_json);
+    RUN_TEST(parse_position_update_json);
+    RUN_TEST(parse_invalid_json);
+    RUN_TEST(parse_missing_fields);
 
     // Message queue tests
-    std::printf("\n--- Message Queue Tests ---\n");
-    if (test_message_queue()) passed++; else failed++;
+    RUN_TEST(message_queue);
 
-    std::printf("\n========================================\n");
-    std::printf("Test Results: %d passed, %d failed\n", passed, failed);
-    std::printf("========================================\n");
-
-    return (failed == 0) ? 0 : 1;
+    test_summary();
+    return 0;
 }

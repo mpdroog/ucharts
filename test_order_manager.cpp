@@ -24,49 +24,9 @@
 // Test helpers
 // ============================================================================
 
-static int g_tests_run = 0;
-static int g_tests_passed = 0;
+#include "test_common.h"
 static const char* TEST_DB = "test_order_manager.db";
 static const char* TEST_DATA_DIR = "test_data_om";
-
-#define TEST(name) static void test_##name()
-#define RUN_TEST(name) do { \
-    g_tests_run++; \
-    std::printf("Running %s... ", #name); \
-    test_##name(); \
-    g_tests_passed++; \
-    std::printf("PASSED\n"); \
-} while(0)
-
-#define ASSERT_TRUE(cond) do { \
-    if (!(cond)) { \
-        std::printf("FAILED: %s is false (line %d)\n", #cond, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_FALSE(cond) ASSERT_TRUE(!(cond))
-
-#define ASSERT_EQ(a, b) do { \
-    if ((a) != (b)) { \
-        std::printf("FAILED: %s != %s (line %d)\n", #a, #b, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_STREQ(a, b) do { \
-    if (std::strcmp((a), (b)) != 0) { \
-        std::printf("FAILED: \"%s\" != \"%s\" (line %d)\n", (a), (b), __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_FLOAT_EQ(a, b, eps) do { \
-    if (std::fabs((a) - (b)) > (eps)) { \
-        std::printf("FAILED: %s (%.4f) != %s (%.4f) (line %d)\n", #a, (double)(a), #b, (double)(b), __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
 
 // Setup test environment
 static Database g_test_db;
@@ -85,7 +45,7 @@ static void on_ws_order_update(const TZOrderUpdate& update) {
 }
 
 // Helper to wait until pending orders reaches expected count (with mutex protection)
-static bool wait_for_pending_count(size_t expected_count, int timeout_ms = 5000) {
+static bool wait_for_pending_count(size_t expected_count, int timeout_ms = 2000) {
     int waited = 0;
     while (waited < timeout_ms) {
         {
@@ -94,8 +54,8 @@ static bool wait_for_pending_count(size_t expected_count, int timeout_ms = 5000)
                 return true;
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        waited += 50;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        waited += 10;
     }
     return false;
 }
@@ -109,7 +69,7 @@ static bool process_fills_stub(OrderManager*) {
     // Wait for pending orders to be filled (removed from pending list)
     // The mock server sends Accepted then Filled events
     // Orders are removed from pending when status becomes Filled
-    return wait_for_pending_count(0u, 5000);
+    return wait_for_pending_count(0u, 2000);
 }
 
 static void setup_test_data() {
@@ -168,12 +128,12 @@ static void init_test_env() {
 
         if (g_test_ws.connect(TZStream::PORTFOLIO)) {
             g_ws_connected = true;
-            // Wait for connection to establish and authenticate (with timeout)
-            int timeout_ms = 5000;
+            // Wait for connection to establish and authenticate (localhost should be fast)
+            int timeout_ms = 1000;
             int waited = 0;
             while (!g_test_ws.is_connected() && waited < timeout_ms) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                waited += 50;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                waited += 10;
             }
         }
     }
@@ -194,7 +154,7 @@ static void reset_mock_server() {
         curl_easy_cleanup(curl);
     }
     // Give mock server time to process reset
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
 
 // Helper to reset global order manager for each test
@@ -564,8 +524,8 @@ TEST(persistence) {
 // Main
 // ============================================================================
 
-int main() {
-    std::printf("Running order manager tests...\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     setup_test_data();
 
@@ -590,8 +550,7 @@ int main() {
     RUN_TEST(persistence);
 
     cleanup_test_data();
-
-    std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
+    test_summary();
 
     // Use _Exit to avoid static destruction order issues with global instances
     std::fflush(stdout);

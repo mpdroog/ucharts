@@ -13,48 +13,8 @@
 // Test helpers
 // ============================================================================
 
-static int g_tests_run = 0;
-static int g_tests_passed = 0;
+#include "test_common.h"
 static const char* TEST_DATA_DIR = "test_data";
-
-#define TEST(name) static void test_##name()
-#define RUN_TEST(name) do { \
-    g_tests_run++; \
-    std::printf("Running %s... ", #name); \
-    test_##name(); \
-    g_tests_passed++; \
-    std::printf("PASSED\n"); \
-} while(0)
-
-#define ASSERT_TRUE(cond) do { \
-    if (!(cond)) { \
-        std::printf("FAILED: %s is false (line %d)\n", #cond, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_FALSE(cond) ASSERT_TRUE(!(cond))
-
-#define ASSERT_EQ(a, b) do { \
-    if ((a) != (b)) { \
-        std::printf("FAILED: %s != %s (line %d)\n", #a, #b, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_STREQ(a, b) do { \
-    if (std::strcmp((a), (b)) != 0) { \
-        std::printf("FAILED: \"%s\" != \"%s\" (line %d)\n", (a), (b), __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_FLOAT_EQ(a, b, eps) do { \
-    if (std::fabs((a) - (b)) > (eps)) { \
-        std::printf("FAILED: %s (%.4f) != %s (%.4f) (line %d)\n", #a, (double)(a), #b, (double)(b), __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
 
 // Create test data directory and files
 static void create_test_data() {
@@ -525,8 +485,8 @@ TEST(iqfeed_parse_multiple_candles) {
 // Main
 // ============================================================================
 
-int main() {
-    std::printf("Running market data tests...\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     create_test_data();
 
@@ -557,8 +517,7 @@ int main() {
     RUN_TEST(iqfeed_parse_multiple_candles);
 
     cleanup_test_data();
-
-    std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
+    test_summary();
 
     // Use _Exit to avoid static destruction order issues with global instances
     std::fflush(stdout);

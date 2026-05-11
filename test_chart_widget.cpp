@@ -174,38 +174,7 @@ static bool is_same_candle_period(const char* candle_ts, int tick_hour, int tick
 // Test helpers
 // ============================================================================
 
-static int g_tests_run = 0;
-static int g_tests_passed = 0;
-
-#define TEST(name) static void test_##name()
-#define RUN_TEST(name) do { \
-    g_tests_run++; \
-    std::printf("Running %s... ", #name); \
-    test_##name(); \
-    g_tests_passed++; \
-    std::printf("PASSED\n"); \
-} while(0)
-
-#define ASSERT_EQ(a, b) do { \
-    if ((a) != (b)) { \
-        std::printf("FAILED: %s (%d) != %s (%d) (line %d)\n", #a, (int)(a), #b, (int)(b), __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_FLOAT_EQ(a, b, eps) do { \
-    if (std::fabs((a) - (b)) > (eps)) { \
-        std::printf("FAILED: %s (%.4f) != %s (%.4f) (line %d)\n", #a, (double)(a), #b, (double)(b), __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_TRUE(cond) do { \
-    if (!(cond)) { \
-        std::printf("FAILED: %s is false (line %d)\n", #cond, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
+#include "test_common.h"
 
 static Candle make_candle(float open, float high, float low, float close, const char* ts = "") {
     Candle c;
@@ -868,8 +837,8 @@ TEST(auto_ma_short_timestamps) {
 // Main
 // ============================================================================
 
-int main() {
-    std::printf("Running chart widget tests...\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     // Session detection tests
     RUN_TEST(session_premarket);
@@ -919,6 +888,6 @@ int main() {
     RUN_TEST(auto_ma_selects_slower_for_trending);
     RUN_TEST(auto_ma_short_timestamps);
 
-    std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
+    test_summary();
     return 0;
 }

@@ -120,38 +120,54 @@ check-deps:
 	fi
 
 # Test targets
+# Usage: make test (quiet) or make test V=1 (verbose)
 test: test_logic test_database test_market_data test_order_manager test_integration test_async_io test_tradezero_config test_tradezero_client test_tradezero_websocket contrib/fake_iqfeed contrib/fake_tradezero
-	@./run_integration_tests.sh
+	@./run_integration_tests.sh $(if $(V),-v,)
 
-test_logic: test_logic.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ $<
+# Shared test object files (compiled once with test flags)
+TEST_OBJS_DIR = .test_objs
+$(TEST_OBJS_DIR):
+	@mkdir -p $(TEST_OBJS_DIR)
 
-test_database: test_database.cpp database.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_database.cpp database.cpp $(TEST_LDFLAGS)
+$(TEST_OBJS_DIR)/%.o: %.cpp | $(TEST_OBJS_DIR)
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -c -o $@ $<
 
-test_market_data: test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+# Common test objects
+TEST_COMMON_OBJS = $(TEST_OBJS_DIR)/json_parser.o $(TEST_OBJS_DIR)/http_client.o
+TEST_MARKET_OBJS = $(TEST_COMMON_OBJS) $(TEST_OBJS_DIR)/market_data.o $(TEST_OBJS_DIR)/iqfeed_tcp.o
+TEST_TZ_OBJS = $(TEST_OBJS_DIR)/tradezero_client.o $(TEST_OBJS_DIR)/tradezero_websocket.o
+TEST_DB_OBJ = $(TEST_OBJS_DIR)/database.o
+TEST_OM_OBJ = $(TEST_OBJS_DIR)/order_manager.o
 
-test_order_manager: test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp $(TEST_LDFLAGS)
+test_logic: test_logic.cpp test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_logic.cpp
 
-test_integration: test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp $(TEST_LDFLAGS)
+test_database: test_database.cpp $(TEST_DB_OBJ) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_database.cpp $(TEST_DB_OBJ) $(TEST_LDFLAGS)
 
-test_async_io: test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+test_market_data: test_market_data.cpp $(TEST_MARKET_OBJS) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_market_data.cpp $(TEST_MARKET_OBJS) $(TEST_LDFLAGS)
 
-test_threading: test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_threading.cpp iqfeed_tcp.cpp market_data.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
+test_order_manager: test_order_manager.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_order_manager.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) $(TEST_LDFLAGS)
 
-test_tradezero_config: test_tradezero_config.cpp
+test_integration: test_integration.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_integration.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) $(TEST_LDFLAGS)
+
+test_async_io: test_async_io.cpp $(TEST_MARKET_OBJS) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_async_io.cpp $(TEST_MARKET_OBJS) $(TEST_LDFLAGS)
+
+test_threading: test_threading.cpp $(TEST_MARKET_OBJS) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_threading.cpp $(TEST_MARKET_OBJS) $(TEST_LDFLAGS)
+
+test_tradezero_config: test_tradezero_config.cpp test_common.h
 	$(CXX) $(TEST_CXXFLAGS) -o $@ test_tradezero_config.cpp
 
-test_tradezero_client: test_tradezero_client.cpp tradezero_client.cpp http_client.cpp json_parser.cpp
-	$(CXX) $(TEST_CXXFLAGS) -o $@ test_tradezero_client.cpp tradezero_client.cpp http_client.cpp json_parser.cpp $(TEST_LDFLAGS)
+test_tradezero_client: test_tradezero_client.cpp $(TEST_OBJS_DIR)/tradezero_client.o $(TEST_COMMON_OBJS) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_tradezero_client.cpp $(TEST_OBJS_DIR)/tradezero_client.o $(TEST_COMMON_OBJS) $(TEST_LDFLAGS)
 
-test_tradezero_websocket: test_tradezero_websocket.cpp tradezero_websocket.cpp
-	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_tradezero_websocket.cpp tradezero_websocket.cpp $(TEST_LDFLAGS)
+test_tradezero_websocket: test_tradezero_websocket.cpp $(TEST_OBJS_DIR)/tradezero_websocket.o test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_tradezero_websocket.cpp $(TEST_OBJS_DIR)/tradezero_websocket.o $(TEST_LDFLAGS)
 
 # Mock servers for integration testing (Go)
 contrib/fake_iqfeed: contrib/fake_iqfeed.go
@@ -184,6 +200,7 @@ thread-check-strict:
 
 clean:
 	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_tradezero_config test_tradezero_client test_tradezero_websocket test_ucharts.db test_order_manager.db test_integration.db
+	rm -rf $(TEST_OBJS_DIR)
 	rm -f contrib/fake_iqfeed contrib/fake_tradezero contrib/test_with_mocks
 	rm -f .fake_iqfeed.pid .fake_tradezero.pid contrib/.fake_*.pid
 

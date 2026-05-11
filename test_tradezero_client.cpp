@@ -4,43 +4,28 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cassert>
+#include <cmath>
 #include <vector>
+#include "test_common.h"
 #include "tradezero_client.h"
 #include "types.h"
-
-// Test helper macros
-#define TEST_ASSERT(condition, message) \
-    do { \
-        if (!(condition)) { \
-            std::fprintf(stderr, "FAIL: %s (line %d): %s\n", __func__, __LINE__, message); \
-            return false; \
-        } \
-    } while(0)
-
-#define TEST_PASS() \
-    do { \
-        std::printf("PASS: %s\n", __func__); \
-        return true; \
-    } while(0)
 
 // ============================================================================
 // Tests for JSON Parsing
 // ============================================================================
 
-bool test_parse_empty_positions() {
+TEST(parse_empty_positions) {
     TradeZeroClient client;
     std::vector<Position> positions;
 
     std::string json = "[]";
     bool result = client.parse_positions(json, positions);
 
-    TEST_ASSERT(result == true, "Should parse empty array");
-    TEST_ASSERT(positions.size() == 0, "Should have zero positions");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(positions.size() == 0);
 }
 
-bool test_parse_single_position() {
+TEST(parse_single_position) {
     TradeZeroClient client;
     std::vector<Position> positions;
 
@@ -60,16 +45,15 @@ bool test_parse_single_position() {
 
     bool result = client.parse_positions(json, positions);
 
-    TEST_ASSERT(result == true, "Should parse valid position");
-    TEST_ASSERT(positions.size() == 1, "Should have one position");
-    TEST_ASSERT(std::strcmp(positions[0].symbol, "AAPL") == 0, "Symbol should be AAPL");
-    TEST_ASSERT(positions[0].quantity == 100, "Quantity should be 100");
-    TEST_ASSERT(positions[0].avg_price == 150.50f, "Avg price should be 150.50");
-    TEST_ASSERT(positions[0].current_price == 151.00f, "Current price should be 151.00");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(positions.size() == 1);
+    ASSERT_STREQ(positions[0].symbol, "AAPL");
+    ASSERT_TRUE(positions[0].quantity == 100);
+    ASSERT_FLOAT_EQ(positions[0].avg_price, 150.50f, 0.01f);
+    ASSERT_FLOAT_EQ(positions[0].current_price, 151.00f, 0.01f);
 }
 
-bool test_parse_multiple_positions() {
+TEST(parse_multiple_positions) {
     TradeZeroClient client;
     std::vector<Position> positions;
 
@@ -90,26 +74,24 @@ bool test_parse_multiple_positions() {
 
     bool result = client.parse_positions(json, positions);
 
-    TEST_ASSERT(result == true, "Should parse multiple positions");
-    TEST_ASSERT(positions.size() == 2, "Should have two positions");
-    TEST_ASSERT(std::strcmp(positions[0].symbol, "AAPL") == 0, "First symbol should be AAPL");
-    TEST_ASSERT(std::strcmp(positions[1].symbol, "TSLA") == 0, "Second symbol should be TSLA");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(positions.size() == 2);
+    ASSERT_STREQ(positions[0].symbol, "AAPL");
+    ASSERT_STREQ(positions[1].symbol, "TSLA");
 }
 
-bool test_parse_empty_orders() {
+TEST(parse_empty_orders) {
     TradeZeroClient client;
     std::vector<Order> orders;
 
     std::string json = "[]";
     bool result = client.parse_orders(json, orders);
 
-    TEST_ASSERT(result == true, "Should parse empty array");
-    TEST_ASSERT(orders.size() == 0, "Should have zero orders");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(orders.size() == 0);
 }
 
-bool test_parse_single_order() {
+TEST(parse_single_order) {
     TradeZeroClient client;
     std::vector<Order> orders;
 
@@ -133,18 +115,17 @@ bool test_parse_single_order() {
 
     bool result = client.parse_orders(json, orders);
 
-    TEST_ASSERT(result == true, "Should parse valid order");
-    TEST_ASSERT(orders.size() == 1, "Should have one order");
-    TEST_ASSERT(std::strcmp(orders[0].symbol, "AAPL") == 0, "Symbol should be AAPL");
-    TEST_ASSERT(std::strcmp(orders[0].client_order_id, "order123") == 0, "Client order ID should match");
-    TEST_ASSERT(orders[0].side == OrderSide::BUY, "Side should be BUY");
-    TEST_ASSERT(orders[0].quantity == 100, "Quantity should be 100");
-    TEST_ASSERT(orders[0].filled == 100, "Filled should be 100");
-    TEST_ASSERT(orders[0].status == OrderStatus::FILLED, "Status should be FILLED");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(orders.size() == 1);
+    ASSERT_STREQ(orders[0].symbol, "AAPL");
+    ASSERT_STREQ(orders[0].client_order_id, "order123");
+    ASSERT_TRUE(orders[0].side == OrderSide::BUY);
+    ASSERT_TRUE(orders[0].quantity == 100);
+    ASSERT_TRUE(orders[0].filled == 100);
+    ASSERT_TRUE(orders[0].status == OrderStatus::FILLED);
 }
 
-bool test_parse_order_status_pending() {
+TEST(parse_order_status_pending) {
     TradeZeroClient client;
     std::vector<Order> orders;
 
@@ -160,15 +141,14 @@ bool test_parse_order_status_pending() {
 
     bool result = client.parse_orders(json, orders);
 
-    TEST_ASSERT(result == true, "Should parse pending order");
-    TEST_ASSERT(orders.size() == 1, "Should have one order");
-    TEST_ASSERT(orders[0].side == OrderSide::SELL, "Side should be SELL");
-    TEST_ASSERT(orders[0].status == OrderStatus::PENDING, "Status should be PENDING");
-    TEST_ASSERT(orders[0].filled == 0, "Filled should be 0");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(orders.size() == 1);
+    ASSERT_TRUE(orders[0].side == OrderSide::SELL);
+    ASSERT_TRUE(orders[0].status == OrderStatus::PENDING);
+    ASSERT_TRUE(orders[0].filled == 0);
 }
 
-bool test_parse_order_status_partial() {
+TEST(parse_order_status_partial) {
     TradeZeroClient client;
     std::vector<Order> orders;
 
@@ -184,15 +164,14 @@ bool test_parse_order_status_partial() {
 
     bool result = client.parse_orders(json, orders);
 
-    TEST_ASSERT(result == true, "Should parse partial order");
-    TEST_ASSERT(orders.size() == 1, "Should have one order");
-    TEST_ASSERT(orders[0].status == OrderStatus::PARTIAL, "Status should be PARTIAL");
-    TEST_ASSERT(orders[0].quantity == 100, "Quantity should be 100");
-    TEST_ASSERT(orders[0].filled == 50, "Filled should be 50");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(orders.size() == 1);
+    ASSERT_TRUE(orders[0].status == OrderStatus::PARTIAL);
+    ASSERT_TRUE(orders[0].quantity == 100);
+    ASSERT_TRUE(orders[0].filled == 50);
 }
 
-bool test_parse_order_status_cancelled() {
+TEST(parse_order_status_cancelled) {
     TradeZeroClient client;
     std::vector<Order> orders;
 
@@ -208,36 +187,33 @@ bool test_parse_order_status_cancelled() {
 
     bool result = client.parse_orders(json, orders);
 
-    TEST_ASSERT(result == true, "Should parse cancelled order");
-    TEST_ASSERT(orders.size() == 1, "Should have one order");
-    TEST_ASSERT(orders[0].status == OrderStatus::CANCELLED, "Status should be CANCELLED");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(orders.size() == 1);
+    ASSERT_TRUE(orders[0].status == OrderStatus::CANCELLED);
 }
 
-bool test_client_initialization() {
+TEST(client_initialization) {
     TradeZeroClient client;
 
-    TEST_ASSERT(!client.is_configured(), "Client should not be configured initially");
+    ASSERT_TRUE(!client.is_configured());
 
     client.set_credentials("test_key_id", "test_secret_key", "test_account_id");
 
-    TEST_ASSERT(client.is_configured(), "Client should be configured after set_credentials");
-    TEST_PASS();
+    ASSERT_TRUE(client.is_configured());
 }
 
-bool test_parse_malformed_json() {
+TEST(parse_malformed_json) {
     TradeZeroClient client;
     std::vector<Position> positions;
 
     std::string json = "{invalid json";
     bool result = client.parse_positions(json, positions);
 
-    TEST_ASSERT(result == false, "Should fail on malformed JSON");
-    TEST_ASSERT(positions.size() == 0, "Should have zero positions");
-    TEST_PASS();
+    ASSERT_TRUE(result == false);
+    ASSERT_TRUE(positions.size() == 0);
 }
 
-bool test_parse_position_with_short_shares() {
+TEST(parse_position_with_short_shares) {
     TradeZeroClient client;
     std::vector<Position> positions;
 
@@ -251,40 +227,33 @@ bool test_parse_position_with_short_shares() {
 
     bool result = client.parse_positions(json, positions);
 
-    TEST_ASSERT(result == true, "Should parse short position");
-    TEST_ASSERT(positions.size() == 1, "Should have one position");
-    TEST_ASSERT(positions[0].quantity == -100, "Quantity should be -100 for short");
-    TEST_PASS();
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(positions.size() == 1);
+    ASSERT_TRUE(positions[0].quantity == -100);
 }
 
 // ============================================================================
-// Main Test Runner
+// Main
 // ============================================================================
 
-int main() {
-    int passed = 0;
-    int failed = 0;
-
-    std::printf("Running TradeZero Client Tests...\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     // JSON parsing tests
-    if (test_parse_empty_positions()) passed++; else failed++;
-    if (test_parse_single_position()) passed++; else failed++;
-    if (test_parse_multiple_positions()) passed++; else failed++;
-    if (test_parse_empty_orders()) passed++; else failed++;
-    if (test_parse_single_order()) passed++; else failed++;
-    if (test_parse_order_status_pending()) passed++; else failed++;
-    if (test_parse_order_status_partial()) passed++; else failed++;
-    if (test_parse_order_status_cancelled()) passed++; else failed++;
-    if (test_parse_malformed_json()) passed++; else failed++;
-    if (test_parse_position_with_short_shares()) passed++; else failed++;
+    RUN_TEST(parse_empty_positions);
+    RUN_TEST(parse_single_position);
+    RUN_TEST(parse_multiple_positions);
+    RUN_TEST(parse_empty_orders);
+    RUN_TEST(parse_single_order);
+    RUN_TEST(parse_order_status_pending);
+    RUN_TEST(parse_order_status_partial);
+    RUN_TEST(parse_order_status_cancelled);
+    RUN_TEST(parse_malformed_json);
+    RUN_TEST(parse_position_with_short_shares);
 
     // Client initialization test
-    if (test_client_initialization()) passed++; else failed++;
+    RUN_TEST(client_initialization);
 
-    std::printf("\n========================================\n");
-    std::printf("Test Results: %d passed, %d failed\n", passed, failed);
-    std::printf("========================================\n");
-
-    return (failed == 0) ? 0 : 1;
+    test_summary();
+    return 0;
 }

@@ -23,16 +23,22 @@ static void process_fills_stub(OrderManager*) {
 // Test framework
 static int g_tests_run = 0;
 static int g_tests_passed = 0;
+static bool g_verbose = false;
+
+static void test_init(int argc, char* argv[]) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0) g_verbose = true;
+    }
+}
 
 #define TEST(name) \
     static void test_##name(); \
     static void run_##name() { \
-        printf("Running %s... ", #name); \
-        fflush(stdout); \
+        if (g_verbose) { printf("Running %s... ", #name); fflush(stdout); } \
         g_tests_run++; \
         test_##name(); \
         g_tests_passed++; \
-        printf("PASSED\n"); \
+        if (g_verbose) printf("PASSED\n"); \
     } \
     static void test_##name()
 
@@ -510,8 +516,8 @@ TEST(level2_ordering) {
 // Main
 // ============================================================================
 
-int main() {
-    printf("Running integration tests...\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     // Setup
     cleanup_test_directory();
@@ -552,7 +558,7 @@ int main() {
     // Cleanup
     cleanup_test_directory();
 
-    printf("\n%d/%d integration tests passed.\n", g_tests_passed, g_tests_run);
+    if (g_verbose) printf("\n%d/%d integration tests passed.\n", g_tests_passed, g_tests_run);
 
     // Use _Exit to avoid static destruction order issues with global instances
     fflush(stdout);

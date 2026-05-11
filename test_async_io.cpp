@@ -13,39 +13,13 @@
 // Test helpers
 // ============================================================================
 
-static int g_tests_run = 0;
-static int g_tests_passed = 0;
+#include "test_common.h"
 
 // Track the main thread ID
 static std::thread::id g_main_thread_id;
 
 // Flag to track if blocking I/O was detected on main thread
 static std::atomic<bool> g_io_on_main_thread{false};
-
-#define TEST(name) static void test_##name()
-#define RUN_TEST(name) do { \
-    g_tests_run++; \
-    std::printf("Running %s... ", #name); \
-    test_##name(); \
-    g_tests_passed++; \
-    std::printf("PASSED\n"); \
-} while(0)
-
-#define ASSERT_TRUE(cond) do { \
-    if (!(cond)) { \
-        std::printf("FAILED: %s is false (line %d)\n", #cond, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
-
-#define ASSERT_FALSE(cond) ASSERT_TRUE(!(cond))
-
-#define ASSERT_EQ(a, b) do { \
-    if ((a) != (b)) { \
-        std::printf("FAILED: %s != %s (line %d)\n", #a, #b, __LINE__); \
-        std::exit(1); \
-    } \
-} while(0)
 
 // ============================================================================
 // Tests
@@ -221,8 +195,8 @@ IQFeedLookup& get_iqfeed_lookup();
 IQFeedLevel1& get_iqfeed_level1();
 IQFeedLevel2& get_iqfeed_level2();
 
-int main() {
-    std::printf("Running async I/O tests...\n\n");
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
     // Record main thread ID
     g_main_thread_id = std::this_thread::get_id();
@@ -237,7 +211,7 @@ int main() {
     RUN_TEST(is_loading_check);
     RUN_TEST(concurrent_load_calls);
 
-    std::printf("\n%d/%d tests passed.\n", g_tests_passed, g_tests_run);
+    test_summary();
 
     // Verify no I/O happened on main thread
     if (g_io_on_main_thread) {
@@ -252,7 +226,6 @@ int main() {
 
     // Use _Exit to skip static destruction which has ordering issues
     // between global MarketData and IQFeedLookup instances
-    std::printf("Clean exit.\n");
     std::fflush(stdout);
     _Exit(0);
 }

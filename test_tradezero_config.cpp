@@ -4,22 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cassert>
-
-// Test helper macros
-#define TEST_ASSERT(condition, message) \
-    do { \
-        if (!(condition)) { \
-            std::fprintf(stderr, "FAIL: %s (line %d): %s\n", __func__, __LINE__, message); \
-            return false; \
-        } \
-    } while(0)
-
-#define TEST_PASS() \
-    do { \
-        std::printf("PASS: %s\n", __func__); \
-        return true; \
-    } while(0)
+#include <cmath>
+#include "test_common.h"
 
 // ============================================================================
 // Copy of TZConfig and INI parser from main.cpp
@@ -116,19 +102,24 @@ static bool load_tradezero_config(const char* ini_path, TZConfig& config) {
 // Tests
 // ============================================================================
 
-bool test_load_nonexistent_file() {
+TEST(config_initialization) {
     TZConfig config;
-    bool result = load_tradezero_config("/tmp/nonexistent_file_12345.ini", config);
-
-    TEST_ASSERT(result == false, "Should fail for nonexistent file");
-    TEST_PASS();
+    ASSERT_TRUE(config.enabled == false);
+    ASSERT_TRUE(config.api_key_id[0] == '\0');
+    ASSERT_TRUE(config.api_secret_key[0] == '\0');
+    ASSERT_TRUE(config.account_id[0] == '\0');
 }
 
-bool test_parse_valid_config() {
-    // Create a temporary config file
+TEST(load_nonexistent_file) {
+    TZConfig config;
+    bool result = load_tradezero_config("/tmp/nonexistent_file_12345.ini", config);
+    ASSERT_TRUE(result == false);
+}
+
+TEST(parse_valid_config) {
     const char* temp_file = "/tmp/test_tz_config.ini";
     FILE* f = std::fopen(temp_file, "w");
-    TEST_ASSERT(f != nullptr, "Should create temp file");
+    ASSERT_TRUE(f != nullptr);
 
     std::fprintf(f, "[tradezero]\n");
     std::fprintf(f, "api_key_id = test_key_123\n");
@@ -140,20 +131,19 @@ bool test_parse_valid_config() {
     TZConfig config;
     bool result = load_tradezero_config(temp_file, config);
 
-    TEST_ASSERT(result == true, "Should parse valid config");
-    TEST_ASSERT(std::strcmp(config.api_key_id, "test_key_123") == 0, "api_key_id should match");
-    TEST_ASSERT(std::strcmp(config.api_secret_key, "test_secret_456") == 0, "api_secret_key should match");
-    TEST_ASSERT(std::strcmp(config.account_id, "ACC789") == 0, "account_id should match");
-    TEST_ASSERT(config.enabled == true, "enabled should be true");
+    ASSERT_TRUE(result == true);
+    ASSERT_STREQ(config.api_key_id, "test_key_123");
+    ASSERT_STREQ(config.api_secret_key, "test_secret_456");
+    ASSERT_STREQ(config.account_id, "ACC789");
+    ASSERT_TRUE(config.enabled == true);
 
     std::remove(temp_file);
-    TEST_PASS();
 }
 
-bool test_parse_disabled_config() {
+TEST(parse_disabled_config) {
     const char* temp_file = "/tmp/test_tz_config_disabled.ini";
     FILE* f = std::fopen(temp_file, "w");
-    TEST_ASSERT(f != nullptr, "Should create temp file");
+    ASSERT_TRUE(f != nullptr);
 
     std::fprintf(f, "[tradezero]\n");
     std::fprintf(f, "enabled = 0\n");
@@ -162,17 +152,16 @@ bool test_parse_disabled_config() {
     TZConfig config;
     bool result = load_tradezero_config(temp_file, config);
 
-    TEST_ASSERT(result == true, "Should parse disabled config");
-    TEST_ASSERT(config.enabled == false, "enabled should be false");
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(config.enabled == false);
 
     std::remove(temp_file);
-    TEST_PASS();
 }
 
-bool test_parse_config_with_whitespace() {
+TEST(parse_config_with_whitespace) {
     const char* temp_file = "/tmp/test_tz_config_ws.ini";
     FILE* f = std::fopen(temp_file, "w");
-    TEST_ASSERT(f != nullptr, "Should create temp file");
+    ASSERT_TRUE(f != nullptr);
 
     std::fprintf(f, "  [tradezero]  \n");
     std::fprintf(f, "  api_key_id  =  test_key  \n");
@@ -184,18 +173,17 @@ bool test_parse_config_with_whitespace() {
     TZConfig config;
     bool result = load_tradezero_config(temp_file, config);
 
-    TEST_ASSERT(result == true, "Should parse config with whitespace");
-    TEST_ASSERT(std::strcmp(config.api_key_id, "test_key  ") == 0, "api_key_id should preserve trailing space");
-    TEST_ASSERT(std::strcmp(config.account_id, "ACC123   ") == 0, "account_id should preserve trailing space");
+    ASSERT_TRUE(result == true);
+    ASSERT_STREQ(config.api_key_id, "test_key  ");
+    ASSERT_STREQ(config.account_id, "ACC123   ");
 
     std::remove(temp_file);
-    TEST_PASS();
 }
 
-bool test_parse_config_with_comments() {
+TEST(parse_config_with_comments) {
     const char* temp_file = "/tmp/test_tz_config_comments.ini";
     FILE* f = std::fopen(temp_file, "w");
-    TEST_ASSERT(f != nullptr, "Should create temp file");
+    ASSERT_TRUE(f != nullptr);
 
     std::fprintf(f, "# This is a comment\n");
     std::fprintf(f, "[tradezero]\n");
@@ -210,17 +198,16 @@ bool test_parse_config_with_comments() {
     TZConfig config;
     bool result = load_tradezero_config(temp_file, config);
 
-    TEST_ASSERT(result == true, "Should parse config with comments");
-    TEST_ASSERT(std::strcmp(config.api_key_id, "test_key") == 0, "api_key_id should match");
+    ASSERT_TRUE(result == true);
+    ASSERT_STREQ(config.api_key_id, "test_key");
 
     std::remove(temp_file);
-    TEST_PASS();
 }
 
-bool test_parse_config_with_other_sections() {
+TEST(parse_config_with_other_sections) {
     const char* temp_file = "/tmp/test_tz_config_sections.ini";
     FILE* f = std::fopen(temp_file, "w");
-    TEST_ASSERT(f != nullptr, "Should create temp file");
+    ASSERT_TRUE(f != nullptr);
 
     std::fprintf(f, "[other_section]\n");
     std::fprintf(f, "other_key = other_value\n");
@@ -236,17 +223,16 @@ bool test_parse_config_with_other_sections() {
     TZConfig config;
     bool result = load_tradezero_config(temp_file, config);
 
-    TEST_ASSERT(result == true, "Should parse config with other sections");
-    TEST_ASSERT(std::strcmp(config.api_key_id, "test_key") == 0, "api_key_id should match");
+    ASSERT_TRUE(result == true);
+    ASSERT_STREQ(config.api_key_id, "test_key");
 
     std::remove(temp_file);
-    TEST_PASS();
 }
 
-bool test_parse_incomplete_enabled_config() {
+TEST(parse_incomplete_enabled_config) {
     const char* temp_file = "/tmp/test_tz_config_incomplete.ini";
     FILE* f = std::fopen(temp_file, "w");
-    TEST_ASSERT(f != nullptr, "Should create temp file");
+    ASSERT_TRUE(f != nullptr);
 
     std::fprintf(f, "[tradezero]\n");
     std::fprintf(f, "api_key_id = test_key\n");
@@ -256,61 +242,43 @@ bool test_parse_incomplete_enabled_config() {
     TZConfig config;
     bool result = load_tradezero_config(temp_file, config);
 
-    TEST_ASSERT(result == false, "Should fail for incomplete enabled config");
+    ASSERT_TRUE(result == false);
 
     std::remove(temp_file);
-    TEST_PASS();
 }
 
-bool test_parse_empty_file() {
+TEST(parse_empty_file) {
     const char* temp_file = "/tmp/test_tz_config_empty.ini";
     FILE* f = std::fopen(temp_file, "w");
-    TEST_ASSERT(f != nullptr, "Should create temp file");
+    ASSERT_TRUE(f != nullptr);
     std::fclose(f);
 
     TZConfig config;
     bool result = load_tradezero_config(temp_file, config);
 
-    TEST_ASSERT(result == true, "Should parse empty file");
-    TEST_ASSERT(config.enabled == false, "enabled should be false");
+    ASSERT_TRUE(result == true);
+    ASSERT_TRUE(config.enabled == false);
 
     std::remove(temp_file);
-    TEST_PASS();
-}
-
-bool test_config_initialization() {
-    TZConfig config;
-
-    TEST_ASSERT(config.enabled == false, "enabled should be false");
-    TEST_ASSERT(config.api_key_id[0] == '\0', "api_key_id should be empty");
-    TEST_ASSERT(config.api_secret_key[0] == '\0', "api_secret_key should be empty");
-    TEST_ASSERT(config.account_id[0] == '\0', "account_id should be empty");
-    TEST_PASS();
 }
 
 // ============================================================================
-// Main Test Runner
+// Main
 // ============================================================================
 
-int main() {
-    int passed = 0;
-    int failed = 0;
+int main(int argc, char* argv[]) {
+    test_init(argc, argv);
 
-    std::printf("Running TradeZero Config Tests...\n\n");
+    RUN_TEST(config_initialization);
+    RUN_TEST(load_nonexistent_file);
+    RUN_TEST(parse_valid_config);
+    RUN_TEST(parse_disabled_config);
+    RUN_TEST(parse_config_with_whitespace);
+    RUN_TEST(parse_config_with_comments);
+    RUN_TEST(parse_config_with_other_sections);
+    RUN_TEST(parse_incomplete_enabled_config);
+    RUN_TEST(parse_empty_file);
 
-    if (test_config_initialization()) passed++; else failed++;
-    if (test_load_nonexistent_file()) passed++; else failed++;
-    if (test_parse_valid_config()) passed++; else failed++;
-    if (test_parse_disabled_config()) passed++; else failed++;
-    if (test_parse_config_with_whitespace()) passed++; else failed++;
-    if (test_parse_config_with_comments()) passed++; else failed++;
-    if (test_parse_config_with_other_sections()) passed++; else failed++;
-    if (test_parse_incomplete_enabled_config()) passed++; else failed++;
-    if (test_parse_empty_file()) passed++; else failed++;
-
-    std::printf("\n========================================\n");
-    std::printf("Test Results: %d passed, %d failed\n", passed, failed);
-    std::printf("========================================\n");
-
-    return (failed == 0) ? 0 : 1;
+    test_summary();
+    return 0;
 }
