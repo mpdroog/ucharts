@@ -47,6 +47,9 @@ struct TZConfig {
     }
 };
 
+// TradeZero initialization thread (stored for proper cleanup)
+static std::thread g_tradezero_init_thread;
+
 // Simple INI parser for TradeZero config
 [[maybe_unused]] static bool load_tradezero_config(const char* ini_path, TZConfig& config) {
     FILE* file = std::fopen(ini_path, "r");
@@ -181,6 +184,9 @@ struct SymbolState {
     }
 };
 static SymbolState g_symbol_states[NUM_TICKERS];
+// Mutex for g_symbol_states - currently only accessed from main UI thread,
+// but mutex is here for safety if future callbacks need access
+static std::mutex g_symbol_states_mutex;
 
 // Undo/redo for drawings
 struct DrawingSnapshot {
@@ -483,6 +489,7 @@ int main(int argc, char** argv) {
 
     glfwSetErrorCallback(glfw_error_callback);
     if (glfwInit() == GLFW_FALSE) {
+        std::fprintf(stderr, "[FATAL] Failed to initialize GLFW\n");
         return 1;
     }
 
@@ -494,6 +501,8 @@ int main(int argc, char** argv) {
 
     GLFWwindow* window = glfwCreateWindow(1600, 900, "Trading Platform", nullptr, nullptr);
     if (window == nullptr) {
+        std::fprintf(stderr, "[FATAL] Failed to create GLFW window\n");
+        glfwTerminate();
         return 1;
     }
     glfwMaximizeWindow(window);  // Maximize to use full screen
@@ -593,7 +602,8 @@ int main(int argc, char** argv) {
         });
 
         // Initialize in background thread (per TradeZero docs)
-        std::thread([]{
+        // Store thread for proper cleanup on exit
+        g_tradezero_init_thread = std::thread([]{
             LOG_I("tradezero", "Connecting TradeZero WebSocket streams...");
 
             // Step 1: Start Portfolio WebSocket (starts buffering)
@@ -643,7 +653,7 @@ int main(int argc, char** argv) {
             }
 
             LOG_I("tradezero", "TradeZero connected successfully");
-        }).detach();
+        });
     } else {
         LOG_I("tradezero", "TradeZero integration disabled or not configured");
     }
@@ -1095,6 +1105,11 @@ int main(int argc, char** argv) {
 
     // Save session before exit
     save_session();
+
+    // Wait for TradeZero initialization thread to complete
+    if (g_tradezero_init_thread.joinable()) {
+        g_tradezero_init_thread.join();
+    }
 
     // Disconnect IQFeed connections BEFORE static destruction
     // This ensures background threads are stopped cleanly

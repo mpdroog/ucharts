@@ -111,7 +111,9 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
             // Find the updated order to save
             for (const auto& o : m_pending_orders) {
                 if (o.id == local_order_id) {
-                    m_db->save_order(o);
+                    if (m_db->save_order(o) < 0) {
+                        LOG_W("orders", "Failed to save order to database: %s", m_db->last_error());
+                    }
                     break;
                 }
             }
@@ -215,7 +217,9 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
         if (m_db != nullptr && m_db->is_open()) {
             for (const auto& o : m_pending_orders) {
                 if (o.id == local_order_id) {
-                    m_db->save_order(o);
+                    if (m_db->save_order(o) < 0) {
+                        LOG_W("orders", "Failed to save order to database: %s", m_db->last_error());
+                    }
                     break;
                 }
             }
@@ -732,7 +736,9 @@ void OrderManager::load_tradezero_orders(const std::vector<Order>& orders) {
 
                 // Save to database
                 if (m_db != nullptr && m_db->is_open()) {
-                    m_db->save_order(tz_order);
+                    if (m_db->save_order(tz_order) < 0) {
+                        LOG_W("orders", "Failed to save order to database: %s", m_db->last_error());
+                    }
                 }
             }
         }

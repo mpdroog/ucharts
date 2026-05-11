@@ -542,9 +542,19 @@ bool Database::save_hlines(const char* symbol, const std::vector<HLine>& lines) 
 
     // Delete existing lines for this symbol
     sqlite3_stmt* del_stmt = nullptr;
-    sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), "DELETE FROM hlines WHERE symbol = ?", -1, &del_stmt, nullptr);
+    if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), "DELETE FROM hlines WHERE symbol = ?", -1, &del_stmt, nullptr) != SQLITE_OK) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to prepare hlines delete: %s",
+                     sqlite3_errmsg(static_cast<sqlite3*>(m_db)));
+        return false;
+    }
     sqlite3_bind_text(del_stmt, 1, symbol, -1, SQLITE_TRANSIENT);
-    sqlite3_step(del_stmt);
+    int del_rc = sqlite3_step(del_stmt);
+    if (del_rc != SQLITE_DONE && del_rc != SQLITE_ROW) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to delete hlines: %s",
+                     sqlite3_errmsg(static_cast<sqlite3*>(m_db)));
+        sqlite3_finalize(del_stmt);
+        return false;
+    }
     sqlite3_finalize(del_stmt);
 
     if (lines.empty()) return true;
@@ -612,9 +622,19 @@ bool Database::save_trendlines(const char* symbol, const std::vector<TrendLine>&
 
     // Delete existing lines for this symbol
     sqlite3_stmt* del_stmt = nullptr;
-    sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), "DELETE FROM trendlines WHERE symbol = ?", -1, &del_stmt, nullptr);
+    if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), "DELETE FROM trendlines WHERE symbol = ?", -1, &del_stmt, nullptr) != SQLITE_OK) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to prepare trendlines delete: %s",
+                     sqlite3_errmsg(static_cast<sqlite3*>(m_db)));
+        return false;
+    }
     sqlite3_bind_text(del_stmt, 1, symbol, -1, SQLITE_TRANSIENT);
-    sqlite3_step(del_stmt);
+    int del_rc = sqlite3_step(del_stmt);
+    if (del_rc != SQLITE_DONE && del_rc != SQLITE_ROW) {
+        std::snprintf(m_error, sizeof(m_error), "Failed to delete trendlines: %s",
+                     sqlite3_errmsg(static_cast<sqlite3*>(m_db)));
+        sqlite3_finalize(del_stmt);
+        return false;
+    }
     sqlite3_finalize(del_stmt);
 
     if (lines.empty()) return true;

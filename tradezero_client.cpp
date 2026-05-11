@@ -39,6 +39,15 @@ TradeZeroClient::TradeZeroClient() : m_timeout(30) {
 }
 
 TradeZeroClient::~TradeZeroClient() {
+    // Securely zero credentials to prevent memory disclosure
+    volatile char* p;
+    p = m_api_key_id;
+    for (size_t i = 0; i < sizeof(m_api_key_id); ++i) p[i] = 0;
+    p = m_api_secret_key;
+    for (size_t i = 0; i < sizeof(m_api_secret_key); ++i) p[i] = 0;
+    p = m_account_id;
+    for (size_t i = 0; i < sizeof(m_account_id); ++i) p[i] = 0;
+
     // curl_global_cleanup() left for static destruction
 }
 
