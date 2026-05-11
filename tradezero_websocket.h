@@ -158,8 +158,8 @@ public:
     void queue_message(const std::string& message) EXCLUDES(m_mutex);
     bool has_queued_messages() const EXCLUDES(m_mutex);
     std::string dequeue_message() EXCLUDES(m_mutex);
-    void send_auth_message();
-    void send_subscribe_message();
+    void send_auth_message() EXCLUDES(m_mutex);
+    void send_subscribe_message() EXCLUDES(m_mutex);
 
 private:
     char m_api_key_id[128];
@@ -201,7 +201,7 @@ private:
     TZConnectionCallback m_connection_callback GUARDED_BY(m_mutex);
 
     // Background thread
-    void worker_thread() NO_THREAD_SAFETY_ANALYSIS;
+    void worker_thread();
 
     // Message parsing (now using nlohmann/json)
     void parse_pnl_snapshot(const std::string& json) EXCLUDES(m_mutex);

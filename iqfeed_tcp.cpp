@@ -149,12 +149,7 @@ void IQFeedLookup::disconnect() EXCLUDES(m_mutex) {
         return;
     }
 
-    // Wake up worker thread
-    {
-        MutexLock lock(m_mutex);
-        m_cond.notify_all();
-    }
-
+    // Worker thread will exit within 100ms (semaphore timeout)
     if (m_thread.joinable()) {
         m_thread.join();
     }
@@ -312,7 +307,7 @@ void IQFeedLookup::fetch_daily(const char* symbol, int datapoints, void* user_da
         MutexLock lock(m_mutex);
         m_requests.push_back(req);
     }
-    m_cond.notify_one();
+    m_sem.post();
 
     LOG_D("iqfeed", "Queued async daily request for %s", req.symbol);
 }
@@ -329,27 +324,26 @@ void IQFeedLookup::fetch_interval(const char* symbol, int interval_secs, int dat
         MutexLock lock(m_mutex);
         m_requests.push_back(req);
     }
-    m_cond.notify_one();
+    m_sem.post();
 
     LOG_D("iqfeed", "Queued async interval request for %s (%ds)", req.symbol, interval_secs);
 }
 
-// Uses condition_variable which requires std::unique_lock
 void IQFeedLookup::worker_thread() {
     LOG_D("iqfeed", "Lookup worker thread started");
 
     while (m_running) {
+        // Wait for work signal (with timeout for clean shutdown)
+        if (!m_sem.wait_for(std::chrono::milliseconds(100))) {
+            continue;  // Timeout - check m_running and retry
+        }
+
+        if (!m_running) break;
+
         Request req;
-
-        // Wait for a request
         {
-            std::unique_lock<std::mutex> lock(m_mutex.native());
-            // Lambda is called with lock held, but analyzer can't prove it
-            m_cond.wait(lock, [this]() NO_THREAD_SAFETY_ANALYSIS { return !m_requests.empty() || !m_running; });
-
-            if (!m_running) break;
-            if (m_requests.empty()) continue;
-
+            MutexLock lock(m_mutex);
+            if (m_requests.empty()) continue;  // Spurious wakeup
             req = m_requests.front();
             m_requests.erase(m_requests.begin());
         }
@@ -697,7 +691,7 @@ void IQFeedLevel1::stream_thread() {
             safe_sleep_ms(10);
         }
     }
-    LOG_I("iqfeed", "L1 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
+    LOG_I("iqfeed", "L1 stream thread exiting (socket=%d, running=%d)", m_socket.load(), m_running.load());
 }
 
 void IQFeedLevel1::parse_l1_message(const std::string& line) {
@@ -1016,7 +1010,7 @@ void IQFeedLevel2::stream_thread() {
             safe_sleep_ms(10);
         }
     }
-    LOG_I("iqfeed", "L2 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
+    LOG_I("iqfeed", "L2 stream thread exiting (socket=%d, running=%d)", m_socket.load(), m_running.load());
 }
 
 void IQFeedLevel2::parse_l2_message(const std::string& line) {

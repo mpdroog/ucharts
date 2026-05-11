@@ -10,6 +10,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <chrono>
 
 // ============================================================================
 // Thread Safety Annotations (Clang)
@@ -25,7 +26,6 @@
 #define ACQUIRE(...) __attribute__((acquire_capability(__VA_ARGS__)))
 #define RELEASE(...) __attribute__((release_capability(__VA_ARGS__)))
 #define EXCLUDES(...) __attribute__((locks_excluded(__VA_ARGS__)))
-#define NO_THREAD_SAFETY_ANALYSIS __attribute__((no_thread_safety_analysis))
 #else
 #define CAPABILITY(x)
 #define SCOPED_CAPABILITY
@@ -36,7 +36,6 @@
 #define ACQUIRE(...)
 #define RELEASE(...)
 #define EXCLUDES(...)
-#define NO_THREAD_SAFETY_ANALYSIS
 #endif
 
 // Mutex wrapper with thread safety annotations
@@ -61,8 +60,40 @@ private:
     Mutex& m_mutex;
 };
 
-// Macro to suppress analysis in complex patterns (condition_variable, etc.)
-#define EXCLUDES_MUTEX(x) EXCLUDES(x)
+// Simple counting semaphore for thread signaling
+// Uses its own internal mutex (not annotated), so it's outside the thread safety annotation system
+class Semaphore {
+public:
+    explicit Semaphore(int initial = 0) : m_count(initial) {}
+
+    void post() {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        ++m_count;
+        m_cond.notify_one();
+    }
+
+    void wait() {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_cond.wait(lock, [this]() { return m_count > 0; });
+        --m_count;
+    }
+
+    // Non-blocking wait with timeout for clean shutdown
+    template<typename Rep, typename Period>
+    bool wait_for(const std::chrono::duration<Rep, Period>& timeout) {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if (!m_cond.wait_for(lock, timeout, [this]() { return m_count > 0; })) {
+            return false;  // Timeout
+        }
+        --m_count;
+        return true;
+    }
+
+private:
+    std::mutex m_mutex;
+    std::condition_variable m_cond;
+    int m_count;
+};
 
 // Default ports for IQFeed
 static const int IQFEED_LOOKUP_PORT = 9100;   // Historical data
@@ -131,7 +162,7 @@ private:
         void* user_data;
     };
 
-    int m_socket;
+    std::atomic<int> m_socket;  // Atomic for thread-safe is_connected() checks
     char m_error[256];
     char m_host[64];
     int m_port;
@@ -140,7 +171,7 @@ private:
     std::atomic<bool> m_running;
     std::thread m_thread;
     mutable Mutex m_mutex;
-    std::condition_variable m_cond;
+    Semaphore m_sem;
     std::vector<Request> m_requests GUARDED_BY(m_mutex);
     LookupCallback m_callback GUARDED_BY(m_mutex);
 
@@ -151,7 +182,7 @@ private:
     bool ensure_connected();
 
     // Background thread
-    void worker_thread() NO_THREAD_SAFETY_ANALYSIS;  // Uses condition_variable
+    void worker_thread();
     void process_request(const Request& req) EXCLUDES(m_mutex);
 };
 
@@ -212,7 +243,7 @@ public:
     [[nodiscard]] const char* last_error() const;
 
 private:
-    int m_socket;
+    std::atomic<int> m_socket;  // Atomic for thread-safe is_connected() checks
     std::atomic<bool> m_running;
     std::thread m_thread;
     Mutex m_mutex;
@@ -281,7 +312,7 @@ private:
         std::vector<L2Level> asks;
     };
 
-    int m_socket;
+    std::atomic<int> m_socket;  // Atomic for thread-safe is_connected() checks
     std::atomic<bool> m_running;
     std::thread m_thread;
     Mutex m_mutex;

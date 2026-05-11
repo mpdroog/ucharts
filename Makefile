@@ -31,8 +31,8 @@ CXXFLAGS = -std=c++17 -O2 \
 # Relaxed flags for ImGui (third-party code)
 IMGUI_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra
 
-# Test flags (less strict to allow test macros)
-TEST_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror
+# Test flags (with ThreadSanitizer for race detection)
+TEST_CXXFLAGS = -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -fsanitize=thread -fno-omit-frame-pointer
 
 # ThreadSanitizer flags for detecting race conditions
 TSAN_CXXFLAGS = -std=c++17 -O1 -g -fsanitize=thread -fno-omit-frame-pointer
@@ -66,11 +66,11 @@ ifeq ($(UNAME_S), Darwin)
     TEST_CXXFLAGS += -I/opt/homebrew/include -I/usr/local/include
     LDFLAGS += -L/opt/homebrew/lib -L/usr/local/lib
     LDFLAGS += -lglfw -lsqlite3 -lcurl -lwebsockets -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo
-    TEST_LDFLAGS = -L/opt/homebrew/lib -L/usr/local/lib -lsqlite3 -lcurl -lwebsockets
+    TEST_LDFLAGS = -fsanitize=thread -L/opt/homebrew/lib -L/usr/local/lib -lsqlite3 -lcurl -lwebsockets
 else
     # Linux
     LDFLAGS += -lglfw -lGL -ldl -lsqlite3 -lcurl
-    TEST_LDFLAGS = -lsqlite3 -lcurl
+    TEST_LDFLAGS = -fsanitize=thread -lsqlite3 -lcurl
 endif
 
 # ImGui sources
