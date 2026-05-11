@@ -31,7 +31,7 @@ static void stress_l1_callback(const L1Quote& quote) {
     g_callback_count++;
 
     // Simulate some work
-    std::this_thread::sleep_for(std::chrono::microseconds(10));
+    safe_sleep_us(10);
 }
 
 static void stress_l2_callback(const char* symbol,
@@ -43,7 +43,7 @@ static void stress_l2_callback(const char* symbol,
     g_callback_count++;
 
     // Simulate some work
-    std::this_thread::sleep_for(std::chrono::microseconds(10));
+    safe_sleep_us(10);
 }
 
 // ============================================================================
@@ -90,7 +90,7 @@ TEST(l1_concurrent_callback_and_access) {
     });
 
     // Run for a bit
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
     stop = true;
 
     parser.join();
@@ -139,7 +139,7 @@ TEST(l2_concurrent_callback_and_access) {
         }
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
     stop = true;
 
     updater.join();
@@ -164,7 +164,7 @@ TEST(callback_with_shared_state_access) {
         // while holding the IQFeedLevel1 mutex
         std::lock_guard<std::mutex> lock(shared_mutex);
         callback_success++;
-        std::this_thread::sleep_for(std::chrono::microseconds(5));
+        safe_sleep_us(5);
     };
 
     // Thread that holds shared_mutex and tries to access IQFeedLevel1
@@ -192,7 +192,7 @@ TEST(callback_with_shared_state_access) {
         }
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
     stop = true;
 
     external.join();
@@ -293,7 +293,7 @@ TEST(concurrent_watch_unwatch) {
         });
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    safe_sleep_ms(200);
     stop = true;
 
     for (auto& t : threads) {
@@ -315,7 +315,7 @@ TEST(market_data_load_symbol) {
     std::printf("(loaded=%d) ", loaded ? 1 : 0);
 
     // Let callbacks run
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
 
     // Access data concurrently while callbacks fire
     std::atomic<bool> stop{false};
@@ -325,11 +325,11 @@ TEST(market_data_load_symbol) {
             (void)md.get_candles("AAPL", Timeframe::M1, candles);
             (void)md.get_candles("AAPL", Timeframe::M5, candles);
             (void)md.get_candles("AAPL", Timeframe::DAILY, candles);
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            safe_sleep_ms(10);
         }
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
     stop = true;
     accessor.join();
 
@@ -349,7 +349,7 @@ TEST(global_instance_crash_repro) {
         // Simulate MarketData::on_lookup_result which locks its own mutex
         std::lock_guard<std::mutex> lock(shared_mutex);
         callback_count++;
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        safe_sleep_us(100);
     });
 
     // Try to connect (will fail, but should not crash)
@@ -359,7 +359,7 @@ TEST(global_instance_crash_repro) {
     std::thread fetcher([&]() {
         while (!stop) {
             get_iqfeed_lookup().fetch_daily("TEST", 100, nullptr);
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            safe_sleep_ms(10);
         }
     });
 
@@ -367,12 +367,12 @@ TEST(global_instance_crash_repro) {
         while (!stop) {
             (void)get_iqfeed_lookup().has_pending_requests();
             (void)get_iqfeed_lookup().is_connected();
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            safe_sleep_ms(5);
         }
     });
 
     // Let it run
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
     stop = true;
 
     fetcher.join();

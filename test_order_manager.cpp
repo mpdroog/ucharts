@@ -54,7 +54,7 @@ static bool wait_for_pending_count(size_t expected_count, int timeout_ms = 2000)
                 return true;
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        safe_sleep_ms(10);
         waited += 10;
     }
     return false;
@@ -132,7 +132,7 @@ static void init_test_env() {
             int timeout_ms = 1000;
             int waited = 0;
             while (!g_test_ws.is_connected() && waited < timeout_ms) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                safe_sleep_ms(10);
                 waited += 10;
             }
         }
@@ -154,7 +154,7 @@ static void reset_mock_server() {
         curl_easy_cleanup(curl);
     }
     // Give mock server time to process reset
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    safe_sleep_ms(10);
 }
 
 // Helper to reset global order manager for each test

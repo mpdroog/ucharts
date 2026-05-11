@@ -138,7 +138,7 @@ int main() {
     lookup.fetch_daily("AAPL", 10);
 
     // Wait for async result
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    safe_sleep_s(1);
 
     return 0;
 }

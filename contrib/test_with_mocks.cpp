@@ -62,7 +62,7 @@ bool test_iqfeed_lookup_daily() {
     lookup.fetch_daily("AAPL", 10);
 
     // Wait for async result
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
 
     TEST_ASSERT(callback_called, "Callback should be invoked");
     TEST_ASSERT(candle_count == 10, "Should receive 10 daily candles");
@@ -92,7 +92,7 @@ bool test_iqfeed_lookup_interval() {
     lookup.fetch_interval("TSLA", 300, 20);
 
     // Wait for async result
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
 
     TEST_ASSERT(callback_called, "Callback should be invoked");
     TEST_ASSERT(candle_count == 20, "Should receive 20 interval candles");
@@ -122,7 +122,7 @@ bool test_iqfeed_level1_quotes() {
     TEST_ASSERT(level1.watch("NVDA"), "Should watch NVDA");
 
     // Wait for quote update
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    safe_sleep_ms(500);
 
     TEST_ASSERT(callback_called, "Callback should be invoked with quote");
     TEST_ASSERT(std::strcmp(symbol_received, "NVDA") == 0, "Should receive NVDA quote");

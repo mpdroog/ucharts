@@ -443,4 +443,13 @@ inline void safe_sleep_s(int s) {
     std::this_thread::sleep_for(std::chrono::seconds(s));
 }
 
+// Safe sleep (microseconds) - crashes if duration <= 0
+inline void safe_sleep_us(int us) {
+    if (us <= 0) {
+        std::fprintf(stderr, "FATAL: safe_sleep_us(%d) - zero/negative duration would cause busy wait\n", us);
+        std::abort();
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(us));
+}
+
 #endif // TYPES_H

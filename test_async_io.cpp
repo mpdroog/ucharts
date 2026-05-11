@@ -111,7 +111,7 @@ TEST(callback_on_worker_thread) {
         // Wait for callback (will fail to connect, but callback should still fire)
         int wait_count = 0;
         while (!callback_invoked && wait_count < 50) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            safe_sleep_ms(100);
             wait_count++;
         }
 

@@ -92,7 +92,7 @@ static bool wait_for_pending_count(size_t expected, int timeout_ms = 2000) {
                 return true;
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        safe_sleep_ms(10);
         waited += 10;
     }
     return false;
@@ -123,7 +123,7 @@ static void setup_tradezero_client() {
             int timeout_ms = 1000;
             int waited = 0;
             while (!g_test_ws.is_connected() && waited < timeout_ms) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                safe_sleep_ms(10);
                 waited += 10;
             }
         }
