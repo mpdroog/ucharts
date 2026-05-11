@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // MockOrder represents an order in the mock system
@@ -40,14 +42,9 @@ var (
 	ordersMu    sync.RWMutex
 	nextOrderID = 1000
 
-	// Event queue for WebSocket notifications
-	eventQueue   []MockOrder
-	eventQueueMu sync.Mutex
-	eventCond    = sync.NewCond(&eventQueueMu)
-
-	// WebSocket clients
-	wsClients   []*websocket.Conn
-	wsClientsMu sync.Mutex
+	// WebSocket clients for broadcasting events
+	wsConns   []*wsConn
+	wsConnsMu sync.RWMutex
 )
 
 var upgrader = websocket.Upgrader{
@@ -71,7 +68,9 @@ func logError(format string, args ...interface{}) {
 func handlePositions(w http.ResponseWriter, r *http.Request) {
 	logInfo("REST: GET %s", r.URL.Path)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"positions":[]}`))
+	if _, err := w.Write([]byte(`{"positions":[]}`)); err != nil {
+		logError("REST: Failed to write positions response: %v", err)
+	}
 }
 
 func handleOrders(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +79,9 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 	defer ordersMu.RUnlock()
 
 	resp := map[string]interface{}{"orders": orders}
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logError("REST: Failed to encode orders response: %v", err)
+	}
 }
 
 func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +114,7 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	order := MockOrder{
 		ClientOrderID: orderID,
 		Symbol:        req.Symbol,
-		Side:          strings.Title(strings.ToLower(req.Side)),
+		Side:          cases.Title(language.English).String(strings.ToLower(req.Side)),
 		OrderStatus:   "Accepted",
 		OrderQuantity: req.Quantity,
 		Executed:      0,
@@ -124,7 +125,7 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	ordersMu.Unlock()
 
 	// Queue WebSocket event for Accepted status
-	queueEvent(order)
+	broadcastEvent(order)
 
 	// Simulate fill after a short delay
 	// Mock market: bid=99.95, ask=100.05
@@ -132,10 +133,12 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	go simulateFill(orderID, req.Side, req.LimitPrice, req.Quantity)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":       true,
 		"clientOrderId": orderID,
-	})
+	}); err != nil {
+		logError("REST: Failed to encode place order response: %v", err)
+	}
 }
 
 // simulateFill checks if an order should fill based on mock market prices
@@ -168,7 +171,7 @@ func simulateFill(orderID, side string, limitPrice float64, qty int) {
 			orders[i].Executed = qty
 			orders[i].PriceAvg = limitPrice
 			logInfo("REST: Order %s filled at %.2f", orderID, limitPrice)
-			queueEvent(orders[i])
+			broadcastEvent(orders[i])
 			break
 		}
 	}
@@ -227,9 +230,11 @@ func handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	ordersMu.Unlock()
 
 	if cancelledOrder != nil {
-		queueEvent(*cancelledOrder)
+		broadcastEvent(*cancelledOrder)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+		if err := json.NewEncoder(w).Encode(map[string]bool{"success": true}); err != nil {
+			logError("REST: Failed to encode cancel order response: %v", err)
+		}
 	} else {
 		http.Error(w, "Order not found", http.StatusNotFound)
 	}
@@ -247,16 +252,18 @@ func handleCancelAllOrders(w http.ResponseWriter, r *http.Request) {
 	for i := range orders {
 		if orders[i].OrderStatus != "Cancelled" && orders[i].OrderStatus != "Filled" {
 			orders[i].OrderStatus = "Cancelled"
-			queueEvent(orders[i])
+			broadcastEvent(orders[i])
 		}
 	}
 	ordersMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	if err := json.NewEncoder(w).Encode(map[string]bool{"success": true}); err != nil {
+		logError("REST: Failed to encode cancel all orders response: %v", err)
+	}
 }
 
-// handleReset clears all orders and events (for testing)
+// handleReset clears all orders (for testing)
 func handleReset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -269,22 +276,35 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 	nextOrderID = 1000
 	ordersMu.Unlock()
 
-	eventQueueMu.Lock()
-	oldEventCount := len(eventQueue)
-	eventQueue = nil
-	eventQueueMu.Unlock()
-
-	logInfo("REST: POST reset - cleared %d orders, %d events", oldOrderCount, oldEventCount)
+	logInfo("REST: POST reset - cleared %d orders", oldOrderCount)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	if err := json.NewEncoder(w).Encode(map[string]bool{"success": true}); err != nil {
+		logError("REST: Failed to encode reset response: %v", err)
+	}
 }
 
-func queueEvent(order MockOrder) {
-	eventQueueMu.Lock()
-	eventQueue = append(eventQueue, order)
-	eventQueueMu.Unlock()
-	eventCond.Broadcast()
+// broadcastEvent sends an order event to all connected WebSocket clients
+func broadcastEvent(order MockOrder) {
+	event := map[string]interface{}{
+		"subscription":  "Order",
+		"clientOrderId": order.ClientOrderID,
+		"symbol":        order.Symbol,
+		"side":          order.Side,
+		"orderStatus":   order.OrderStatus,
+		"orderQuantity": order.OrderQuantity,
+		"executed":      order.Executed,
+		"limitPrice":    order.LimitPrice,
+	}
+
+	wsConnsMu.RLock()
+	defer wsConnsMu.RUnlock()
+
+	for _, wsc := range wsConns {
+		if wsc.queueSend(event) {
+			logInfo("WS: Broadcast order event for %s (%s) to client", order.ClientOrderID, order.OrderStatus)
+		}
+	}
 }
 
 // wsConn wraps a websocket connection with thread-safe state tracking
@@ -387,7 +407,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		wsc.setClosed()
 		conn.Close()
-		unregisterClient(conn)
+		unregisterWsConn(wsc)
 		logInfo("WS: Client disconnected from %s", path)
 	}()
 
@@ -418,22 +438,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func runWebSocketLoop(wsc *wsConn, path string) error {
 	authenticated := false
 	subscribed := false
-
-	// Start event sender goroutine for portfolio stream
-	if path == "/stream/portfolio" {
-		go func() {
-			ticker := time.NewTicker(100 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-wsc.doneChan:
-					return
-				case <-ticker.C:
-					sendPendingEventsViaChannel(wsc)
-				}
-			}
-		}()
-	}
 
 	for {
 		// Check if connection was closed
@@ -496,52 +500,29 @@ func runWebSocketLoop(wsc *wsConn, path string) error {
 				subscribed = true
 				logInfo("WS: Subscribed to %s", path)
 
-				// Register client for events
-				wsClientsMu.Lock()
-				wsClients = append(wsClients, wsc.conn)
-				wsClientsMu.Unlock()
+				// Register client for broadcast events
+				registerWsConn(wsc)
 			}
 		}
-		// Events are sent by the background goroutine, no action needed here
+		// Events are broadcast directly via broadcastEvent(), no polling needed
 	}
 }
 
-func unregisterClient(conn *websocket.Conn) {
-	wsClientsMu.Lock()
-	defer wsClientsMu.Unlock()
-	for i, c := range wsClients {
-		if c == conn {
-			wsClients = append(wsClients[:i], wsClients[i+1:]...)
+func registerWsConn(wsc *wsConn) {
+	wsConnsMu.Lock()
+	defer wsConnsMu.Unlock()
+	wsConns = append(wsConns, wsc)
+	logInfo("WS: Registered client (total: %d)", len(wsConns))
+}
+
+func unregisterWsConn(wsc *wsConn) {
+	wsConnsMu.Lock()
+	defer wsConnsMu.Unlock()
+	for i, c := range wsConns {
+		if c == wsc {
+			wsConns = append(wsConns[:i], wsConns[i+1:]...)
+			logInfo("WS: Unregistered client (remaining: %d)", len(wsConns))
 			return
-		}
-	}
-}
-
-// sendPendingEventsViaChannel sends events using the channel-based approach
-func sendPendingEventsViaChannel(wsc *wsConn) {
-	if wsc.isClosed() {
-		return
-	}
-
-	eventQueueMu.Lock()
-	events := eventQueue
-	eventQueue = nil
-	eventQueueMu.Unlock()
-
-	for _, order := range events {
-		event := map[string]interface{}{
-			"subscription":  "Order",
-			"clientOrderId": order.ClientOrderID,
-			"symbol":        order.Symbol,
-			"side":          order.Side,
-			"orderStatus":   order.OrderStatus,
-			"orderQuantity": order.OrderQuantity,
-			"executed":      order.Executed,
-			"limitPrice":    order.LimitPrice,
-		}
-
-		if wsc.queueSend(event) {
-			logInfo("WS: Queued order event for %s (%s)", order.ClientOrderID, order.OrderStatus)
 		}
 	}
 }
@@ -631,8 +612,12 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
-	httpServer.Shutdown(shutdownCtx)
-	wsServer.Shutdown(shutdownCtx)
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logError("HTTP server shutdown error: %v", err)
+	}
+	if err := wsServer.Shutdown(shutdownCtx); err != nil {
+		logError("WebSocket server shutdown error: %v", err)
+	}
 
 	logInfo("Server stopped")
 }

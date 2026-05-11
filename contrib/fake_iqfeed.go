@@ -9,6 +9,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"os"
@@ -19,10 +20,6 @@ import (
 	"time"
 )
 
-var (
-	watchedSymbols   = make(map[string]bool)
-	watchedSymbolsMu sync.RWMutex
-)
 
 func logInfo(format string, args ...interface{}) {
 	ts := time.Now().Format("15:04:05")
@@ -103,7 +100,7 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			if err.Error() != "EOF" {
+			if err != io.EOF {
 				logError("Lookup: Read error: %v", err)
 			}
 			break
@@ -131,16 +128,22 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 				logInfo("Lookup: HDX request for %s", symbol)
 
 				// Send header
-				conn.Write([]byte("LH,TimeStamp,High,Low,Open,Close,PeriodVolume,OpenInterest\r\n"))
+				if _, err := conn.Write([]byte("LH,TimeStamp,High,Low,Open,Close,PeriodVolume,OpenInterest\r\n")); err != nil {
+					logError("Lookup: Failed to write HDX header: %v", err)
+				}
 
 				// Send fake candles
 				candles := generateFakeCandles(symbol, 30)
 				for _, candle := range candles {
-					conn.Write([]byte(candle + "\r\n"))
+					if _, err := conn.Write([]byte(candle + "\r\n")); err != nil {
+						logError("Lookup: Failed to write HDX candle: %v", err)
+					}
 				}
 
 				// End marker
-				conn.Write([]byte("!ENDMSG!,\r\n"))
+				if _, err := conn.Write([]byte("!ENDMSG!,\r\n")); err != nil {
+					logError("Lookup: Failed to write HDX end marker: %v", err)
+				}
 			}
 
 		case cmd == "HIX": // Historical interval data
@@ -149,7 +152,9 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 				logInfo("Lookup: HIX request for %s", symbol)
 
 				// Send header
-				conn.Write([]byte("LH,TimeStamp,High,Low,Open,Close,TotalVolume,PeriodVolume\r\n"))
+				if _, err := conn.Write([]byte("LH,TimeStamp,High,Low,Open,Close,TotalVolume,PeriodVolume\r\n")); err != nil {
+					logError("Lookup: Failed to write HIX header: %v", err)
+				}
 
 				// Send fake minute candles
 				basePrice := 100.0
@@ -164,17 +169,23 @@ func handleLookupClient(conn net.Conn, ctx context.Context) {
 					line := fmt.Sprintf("%s,%.2f,%.2f,%.2f,%.2f,%d,%d",
 						ts.Format("2006-01-02 15:04:05"),
 						high, low, open, close, volume, volume)
-					conn.Write([]byte(line + "\r\n"))
+					if _, err := conn.Write([]byte(line + "\r\n")); err != nil {
+						logError("Lookup: Failed to write HIX candle: %v", err)
+					}
 
 					basePrice = close
 				}
 
-				conn.Write([]byte("!ENDMSG!,\r\n"))
+				if _, err := conn.Write([]byte("!ENDMSG!,\r\n")); err != nil {
+					logError("Lookup: Failed to write HIX end marker: %v", err)
+				}
 			}
 
 		case cmd == "S": // System command
 			logInfo("Lookup: System command")
-			conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n"))
+			if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
+				logError("Lookup: Failed to write system response: %v", err)
+			}
 
 		default:
 			logInfo("Lookup: Unknown command: %s", cmd)
@@ -191,6 +202,10 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 
 	reader := bufio.NewReader(conn)
 
+	// Per-connection watched symbols with mutex for thread safety
+	var watchedSymbols = make(map[string]bool)
+	var watchedMu sync.RWMutex
+
 	// Start quote updater goroutine
 	quoteChan := make(chan struct{})
 	go func() {
@@ -204,12 +219,14 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 			case <-quoteChan:
 				return
 			case <-ticker.C:
-				watchedSymbolsMu.RLock()
+				watchedMu.RLock()
 				for symbol := range watchedSymbols {
 					quote := generateFakeL1Quote(symbol)
-					conn.Write([]byte(quote + "\r\n"))
+					if _, err := conn.Write([]byte(quote + "\r\n")); err != nil {
+						logError("Level1: Failed to write quote for %s: %v", symbol, err)
+					}
 				}
-				watchedSymbolsMu.RUnlock()
+				watchedMu.RUnlock()
 			}
 		}
 	}()
@@ -228,7 +245,7 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			if err.Error() != "EOF" {
+			if err != io.EOF {
 				logError("Level1: Read error: %v", err)
 			}
 			break
@@ -248,23 +265,27 @@ func handleLevel1Client(conn net.Conn, ctx context.Context) {
 
 			switch cmd {
 			case 'w': // Watch
-				watchedSymbolsMu.Lock()
+				watchedMu.Lock()
 				watchedSymbols[symbol] = true
-				watchedSymbolsMu.Unlock()
+				watchedMu.Unlock()
 				logInfo("Level1: Watching %s", symbol)
 
 				// Send initial quote
 				quote := generateFakeL1Quote(symbol)
-				conn.Write([]byte(quote + "\r\n"))
+				if _, err := conn.Write([]byte(quote + "\r\n")); err != nil {
+					logError("Level1: Failed to write initial quote for %s: %v", symbol, err)
+				}
 
 			case 'r': // Unwatch
-				watchedSymbolsMu.Lock()
+				watchedMu.Lock()
 				delete(watchedSymbols, symbol)
-				watchedSymbolsMu.Unlock()
+				watchedMu.Unlock()
 				logInfo("Level1: Unwatching %s", symbol)
 
 			case 'S': // System
-				conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n"))
+				if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
+					logError("Level1: Failed to write system response: %v", err)
+				}
 			}
 		}
 	}
@@ -279,7 +300,10 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 	logInfo("Level2: Client connected from %s", conn.RemoteAddr())
 
 	reader := bufio.NewReader(conn)
-	watched := make(map[string]bool)
+
+	// Per-connection watched symbols with mutex for thread safety
+	var watched = make(map[string]bool)
+	var watchedMu sync.RWMutex
 
 	// Start L2 updater goroutine
 	updateChan := make(chan struct{})
@@ -294,10 +318,14 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 			case <-updateChan:
 				return
 			case <-ticker.C:
+				watchedMu.RLock()
 				for symbol := range watched {
 					update := generateFakeL2Update(symbol)
-					conn.Write([]byte(update + "\r\n"))
+					if _, err := conn.Write([]byte(update + "\r\n")); err != nil {
+						logError("Level2: Failed to write update for %s: %v", symbol, err)
+					}
 				}
+				watchedMu.RUnlock()
 			}
 		}
 	}()
@@ -316,7 +344,7 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			if err.Error() != "EOF" {
+			if err != io.EOF {
 				logError("Level2: Read error: %v", err)
 			}
 			break
@@ -335,7 +363,9 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 
 			switch cmd {
 			case 'w': // Watch
+				watchedMu.Lock()
 				watched[symbol] = true
+				watchedMu.Unlock()
 				logInfo("Level2: Watching %s", symbol)
 
 				// Send initial book snapshot
@@ -344,16 +374,24 @@ func handleLevel2Client(conn net.Conn, ctx context.Context) {
 					askPrice := 100.00 + float64(i)*0.01
 					size := 100 * (1 + rand.Intn(10))
 
-					conn.Write([]byte(fmt.Sprintf("2,%s,BID,NYSE,%.2f,%d\r\n", symbol, bidPrice, size)))
-					conn.Write([]byte(fmt.Sprintf("2,%s,ASK,NYSE,%.2f,%d\r\n", symbol, askPrice, size)))
+					if _, err := conn.Write([]byte(fmt.Sprintf("2,%s,BID,NYSE,%.2f,%d\r\n", symbol, bidPrice, size))); err != nil {
+						logError("Level2: Failed to write BID snapshot for %s: %v", symbol, err)
+					}
+					if _, err := conn.Write([]byte(fmt.Sprintf("2,%s,ASK,NYSE,%.2f,%d\r\n", symbol, askPrice, size))); err != nil {
+						logError("Level2: Failed to write ASK snapshot for %s: %v", symbol, err)
+					}
 				}
 
 			case 'r': // Unwatch
+				watchedMu.Lock()
 				delete(watched, symbol)
+				watchedMu.Unlock()
 				logInfo("Level2: Unwatching %s", symbol)
 
 			case 'S': // System
-				conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n"))
+				if _, err := conn.Write([]byte("S,CURRENT PROTOCOL,6.2\r\n")); err != nil {
+					logError("Level2: Failed to write system response: %v", err)
+				}
 			}
 		}
 	}
@@ -399,7 +437,7 @@ func main() {
 	level2Port := flag.Int("level2-port", 9200, "Level2 server port")
 	flag.Parse()
 
-	rand.Seed(time.Now().UnixNano())
+	// Note: rand is auto-seeded in Go 1.20+
 
 	logInfo("Starting fake IQFeed server")
 	logInfo("Lookup port: %d", *lookupPort)
