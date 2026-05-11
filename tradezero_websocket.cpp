@@ -254,7 +254,7 @@ bool TradeZeroWebSocket::connect(TZStream stream) {
 
     // Wait a bit for connection (simple approach)
     for (int i = 0; i < 50 && !m_connected.load(); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        safe_sleep_ms(100);
     }
 
     return m_connected.load();
@@ -394,7 +394,7 @@ void TradeZeroWebSocket::worker_thread() {
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        safe_sleep_ms(10);
     }
 
     // Clear active client BEFORE destroying context
@@ -807,7 +807,7 @@ bool TradeZeroWebSocket::reconnect() {
     LOG_I("tradezero_ws", "Reconnecting in %dms (attempt %d/%d)...",
           delay_ms, attempts + 1, MAX_RECONNECT_ATTEMPTS);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    safe_sleep_ms(delay_ms);
 
     // Reset connection state
     m_connected.store(false);

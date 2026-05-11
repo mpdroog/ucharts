@@ -416,4 +416,31 @@ inline bool symbols_equal(const char* a, const char* b) {
     return *a == *b;
 }
 
+// ============================================================================
+// Safe sleep functions - crash on zero/negative duration to prevent busy waits
+// ============================================================================
+
+#include <thread>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+
+// Safe sleep (milliseconds) - crashes if duration <= 0
+inline void safe_sleep_ms(int ms) {
+    if (ms <= 0) {
+        std::fprintf(stderr, "FATAL: safe_sleep_ms(%d) - zero/negative duration would cause busy wait\n", ms);
+        std::abort();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+// Safe sleep (seconds) - crashes if duration <= 0
+inline void safe_sleep_s(int s) {
+    if (s <= 0) {
+        std::fprintf(stderr, "FATAL: safe_sleep_s(%d) - zero/negative duration would cause busy wait\n", s);
+        std::abort();
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(s));
+}
+
 #endif // TYPES_H

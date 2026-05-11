@@ -678,23 +678,23 @@ void IQFeedLevel1::stream_thread() {
                 // Yield CPU every 100 messages to prevent hogging when data streams fast
                 if (msg_count >= 100) {
                     msg_count = 0;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    safe_sleep_ms(1);
                 }
             }
         } else if (result == -1) {
             // Error/disconnect - keep trying to reconnect
             while (m_running && m_socket < 0) {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
+                safe_sleep_s(2);
                 if (m_running) {
                     reconnect();
                     if (m_socket < 0) {
-                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                        safe_sleep_s(3);
                     }
                 }
             }
         } else {
             // result == 0 is timeout - sleep briefly to avoid busy-waiting
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            safe_sleep_ms(10);
         }
     }
     LOG_I("iqfeed", "L1 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());
@@ -997,23 +997,23 @@ void IQFeedLevel2::stream_thread() {
                 // Yield CPU every 100 messages to prevent hogging when data streams fast
                 if (msg_count >= 100) {
                     msg_count = 0;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    safe_sleep_ms(1);
                 }
             }
         } else if (result == -1) {
             // Error/disconnect - keep trying to reconnect
             while (m_running && m_socket < 0) {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
+                safe_sleep_s(2);
                 if (m_running) {
                     reconnect();
                     if (m_socket < 0) {
-                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                        safe_sleep_s(3);
                     }
                 }
             }
         } else {
             // result == 0 is timeout - sleep briefly to avoid busy-waiting
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            safe_sleep_ms(10);
         }
     }
     LOG_I("iqfeed", "L2 stream thread exiting (socket=%d, running=%d)", m_socket, m_running.load());

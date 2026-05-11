@@ -1095,11 +1095,15 @@ int main(int argc, char** argv) {
 
         glfwSwapBuffers(window);
 
-        // Limit frame rate to reduce CPU usage
+        // Limit frame rate to ~60 FPS to reduce CPU usage
+        // Not a busy-wait risk: if we skip sleep, rendering still takes time
         auto frame_end = std::chrono::steady_clock::now();
         auto frame_duration = frame_end - frame_start;
         if (frame_duration < TARGET_FRAME_TIME) {
-            std::this_thread::sleep_for(TARGET_FRAME_TIME - frame_duration);
+            auto sleep_ms = std::chrono::duration_cast<std::chrono::milliseconds>(TARGET_FRAME_TIME - frame_duration).count();
+            if (sleep_ms > 0) {
+                safe_sleep_ms(static_cast<int>(sleep_ms));
+            }
         }
     }
 
