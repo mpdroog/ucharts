@@ -259,23 +259,6 @@ struct ChartViewState {
     void reset() { zoom = 1.0f; pan_x = -1.0f; }
 };
 
-// Per-symbol chart state (persisted)
-struct SymbolChartState {
-    std::vector<HLine> hlines;
-    std::vector<TrendLine> trendlines;
-    IndicatorSettings indicators;
-    ChartViewState view_1m;
-    ChartViewState view_5m;
-    ChartViewState view_daily;
-
-    SymbolChartState() {
-        // Zoom in more on intraday charts by default
-        view_1m.zoom = 18.0f;  // Show ~1/18 of candles (most recent ~20 mins)
-        view_5m.zoom = 12.0f;  // Show ~1/12 of candles
-        view_daily.zoom = 1.0f; // Show all candles
-    }
-};
-
 // Ticker window state
 struct TickerState {
     char symbol[8];
@@ -336,61 +319,6 @@ struct FullscreenState {
     Timeframe timeframe;
 
     FullscreenState() : active(false), timeframe(Timeframe::M1) {}
-};
-
-// Global application state
-struct AppState {
-    // Ticker windows
-    TickerState tickers[NUM_TICKERS];
-    int selected_ticker;
-
-    // Chart data per symbol
-    std::map<std::string, std::vector<Candle>> candles_1m;
-    std::map<std::string, std::vector<Candle>> candles_5m;
-    std::map<std::string, std::vector<Candle>> candles_daily;
-    std::map<std::string, SymbolChartState> chart_states;
-
-    // Positions
-    std::vector<Position> open_positions;
-    std::vector<ClosedPosition> closed_positions;
-    std::vector<Order> pending_orders;
-
-    // UI state
-    FullscreenState fullscreen;
-    int64_t current_sim_time;  // Current simulation timestamp
-
-    AppState() : selected_ticker(0), current_sim_time(0) {
-        tickers[0].selected = true;
-    }
-
-    const char* selected_symbol() const {
-        if (selected_ticker >= 0 && selected_ticker < NUM_TICKERS) {
-            return tickers[selected_ticker].symbol;
-        }
-        return "";
-    }
-
-    void select_ticker(int idx) {
-        if (idx >= 0 && idx < NUM_TICKERS) {
-            for (int i = 0; i < NUM_TICKERS; i++) {
-                tickers[i].selected = (i == idx);
-            }
-            selected_ticker = idx;
-        }
-    }
-
-    Position* find_position(const char* symbol) {
-        for (auto& pos : open_positions) {
-            if (std::strcmp(pos.symbol, symbol) == 0) {
-                return &pos;
-            }
-        }
-        return nullptr;
-    }
-
-    SymbolChartState& get_chart_state(const char* symbol) {
-        return chart_states[std::string(symbol)];
-    }
 };
 
 // ============================================================================

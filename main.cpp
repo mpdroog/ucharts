@@ -177,9 +177,9 @@ struct SymbolState {
 
     SymbolState() {
         symbol[0] = '\0';
-        // Zoom in on intraday charts by default
-        view_1m.zoom = 18.0f;
-        view_5m.zoom = 12.0f;
+        // Zoom out on intraday charts by default
+        view_1m.zoom = 6.0f;   // ~33 candles visible (half hour)
+        view_5m.zoom = 6.0f;   // ~33 candles visible (~2.5 hours)
         view_daily.zoom = 1.0f;
     }
 };

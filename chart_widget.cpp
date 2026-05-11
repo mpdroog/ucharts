@@ -26,24 +26,9 @@ void ChartWidget::set_symbol(const char* symbol) {
 }
 
 void ChartWidget::set_candles(const std::vector<Candle>& candles) {
-    // Check if data actually changed
-    bool data_changed = (candles.size() != m_candles.size());
-
-    // Also check if last candle changed (L1 updates modify last candle's OHLC)
-    if (!data_changed && !candles.empty() && !m_candles.empty()) {
-        const Candle& new_last = candles.back();
-        const Candle& old_last = m_candles.back();
-        if (new_last.close != old_last.close ||
-            new_last.high != old_last.high ||
-            new_last.low != old_last.low ||
-            new_last.open != old_last.open) {
-            data_changed = true;
-        }
-    }
-
-    if (m_indicators_dirty || data_changed) {
-        m_candles = candles;
-    }
+    // Always copy and mark dirty - L1 updates modify candle data frequently
+    m_candles = candles;
+    m_indicators_dirty = true;
 }
 
 void ChartWidget::set_daily_candles(const std::vector<Candle>* daily_candles) {
@@ -243,17 +228,19 @@ void ChartWidget::calculate_vwap() {
     for (size_t i = 0; i < m_candles.size(); i++) {
         const Candle& c = m_candles[i];
 
-        // Extract date from timestamp (YYYY-MM-DD or just first 10 chars)
-        // Handle short timestamps safely
+        // Extract date from timestamp (YYYY-MM-DD format expected)
+        // Time-only timestamps (HH:MM:SS) from L1 updates have no date, so don't reset
         std::string ts(c.timestamp);
-        std::string date = (ts.length() >= 10) ? ts.substr(0, 10) : ts;
-
-        // Reset VWAP at new day
-        if (date != current_date) {
-            cum_tp_vol = 0.0f;
-            cum_vol = 0.0f;
-            current_date = date;
+        if (ts.length() >= 10) {
+            std::string date = ts.substr(0, 10);
+            // Reset VWAP at new day
+            if (date != current_date) {
+                cum_tp_vol = 0.0f;
+                cum_vol = 0.0f;
+                current_date = date;
+            }
         }
+        // For time-only timestamps, don't reset - assume same day
 
         float typical_price = (c.high + c.low + c.close) / 3.0f;
         float vol = c.volume > 0 ? c.volume : 1.0f;  // Avoid div by zero
@@ -285,15 +272,18 @@ void ChartWidget::calculate_cumulative_delta() {
     for (size_t i = 0; i < m_candles.size(); i++) {
         const Candle& c = m_candles[i];
 
-        // Extract date for daily reset (handle short timestamps safely)
+        // Extract date for daily reset (YYYY-MM-DD format expected)
+        // Time-only timestamps (HH:MM:SS) from L1 updates have no date, so don't reset
         std::string ts(c.timestamp);
-        std::string date = (ts.length() >= 10) ? ts.substr(0, 10) : ts;
-
-        // Reset cumulative delta at new day
-        if (date != current_date) {
-            cum_delta = 0.0f;
-            current_date = date;
+        if (ts.length() >= 10) {
+            std::string date = ts.substr(0, 10);
+            // Reset cumulative delta at new day
+            if (date != current_date) {
+                cum_delta = 0.0f;
+                current_date = date;
+            }
         }
+        // For time-only timestamps, don't reset - assume same day
 
         float range = c.high - c.low;
         if (range < 0.001f) range = 0.001f;  // Avoid div by zero
