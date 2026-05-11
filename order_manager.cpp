@@ -29,6 +29,16 @@ void OrderManager::init(Database* db, MarketData* market) {
     m_market = market;
 }
 
+void OrderManager::reset() {
+    MutexLock lock(m_mutex);
+    m_pending_orders.clear();
+    m_open_positions.clear();
+    m_closed_positions.clear();
+    m_next_order_id = 1;
+    m_order_callback = nullptr;
+    m_position_callback = nullptr;
+}
+
 int64_t OrderManager::get_current_timestamp() const {
     return static_cast<int64_t>(std::time(nullptr));
 }
@@ -37,6 +47,8 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
     if (symbol == nullptr || symbol[0] == '\0' || quantity <= 0 || price <= 0) {
         return -1;
     }
+
+    MutexLock lock(m_mutex);
 
     // Place order via TradeZero REST API
     if (m_tradezero_client != nullptr && m_tradezero_client->is_configured()) {
@@ -140,8 +152,10 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
         return -1;
     }
 
+    MutexLock lock(m_mutex);
+
     // Check if we have enough position to sell
-    Position* pos = find_position(symbol);
+    Position* pos = find_position_locked(symbol);
     if (pos == nullptr || pos->quantity < quantity) {
         LOG_W("orders", "SELL rejected: %s qty=%d - insufficient position", symbol, quantity);
         return -1;  // Not enough shares to sell
@@ -242,7 +256,9 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
 }
 
 bool OrderManager::cancel_order(int64_t order_id) {
-    Order* order = find_order(order_id);
+    MutexLock lock(m_mutex);
+
+    Order* order = find_order_locked(order_id);
     if (order == nullptr) return false;
 
     // Cancel via TradeZero REST API
@@ -266,6 +282,8 @@ bool OrderManager::cancel_order(int64_t order_id) {
 }
 
 bool OrderManager::cancel_all_orders(const char* symbol) {
+    MutexLock lock(m_mutex);
+
     if (m_tradezero_client == nullptr || !m_tradezero_client->is_configured()) {
         LOG_E("orders", "TradeZero client not configured");
         return false;
@@ -304,10 +322,17 @@ bool OrderManager::cancel_all_orders(const char* symbol) {
 }
 
 const std::vector<Order>& OrderManager::get_pending_orders() const {
+    MutexLock lock(m_mutex);
     return m_pending_orders;
 }
 
 Order* OrderManager::find_order(int64_t order_id) {
+    MutexLock lock(m_mutex);
+    return find_order_locked(order_id);
+}
+
+// Internal helper - requires m_mutex to be held
+Order* OrderManager::find_order_locked(int64_t order_id) {
     for (auto& order : m_pending_orders) {
         if (order.id == order_id) {
             return &order;
@@ -317,14 +342,22 @@ Order* OrderManager::find_order(int64_t order_id) {
 }
 
 const std::vector<Position>& OrderManager::get_open_positions() const {
+    MutexLock lock(m_mutex);
     return m_open_positions;
 }
 
 const std::vector<ClosedPosition>& OrderManager::get_closed_positions() const {
+    MutexLock lock(m_mutex);
     return m_closed_positions;
 }
 
 Position* OrderManager::find_position(const char* symbol) {
+    MutexLock lock(m_mutex);
+    return find_position_locked(symbol);
+}
+
+// Internal helper - requires m_mutex to be held
+Position* OrderManager::find_position_locked(const char* symbol) {
     if (symbol == nullptr) return nullptr;
 
     for (auto& pos : m_open_positions) {
@@ -338,6 +371,7 @@ Position* OrderManager::find_position(const char* symbol) {
 void OrderManager::update_prices() {
     if (m_market == nullptr) return;
 
+    MutexLock lock(m_mutex);
     for (auto& pos : m_open_positions) {
         float price = m_market->get_current_price(pos.symbol);
         if (price > 0) {
@@ -351,7 +385,9 @@ void OrderManager::update_prices() {
 // instead of CSV simulation
 
 int OrderManager::calculate_sell_quantity(const char* symbol, int percentage) {
-    Position* pos = find_position(symbol);
+    MutexLock lock(m_mutex);
+
+    Position* pos = find_position_locked(symbol);
     if (pos == nullptr || pos->quantity <= 0 || percentage <= 0) {
         return 0;
     }
@@ -361,7 +397,8 @@ int OrderManager::calculate_sell_quantity(const char* symbol, int percentage) {
 }
 
 void OrderManager::update_position_on_buy(const char* symbol, int quantity, float price) {
-    Position* pos = find_position(symbol);
+    // Note: Caller must hold m_mutex
+    Position* pos = find_position_locked(symbol);
 
     if (pos != nullptr) {
         // Update existing position with weighted average price
@@ -399,7 +436,8 @@ void OrderManager::update_position_on_buy(const char* symbol, int quantity, floa
 }
 
 void OrderManager::update_position_on_sell(const char* symbol, int quantity, float price) {
-    Position* pos = find_position(symbol);
+    // Note: Caller must hold m_mutex
+    Position* pos = find_position_locked(symbol);
     if (pos == nullptr) return;
 
     // Record closed position
@@ -446,15 +484,19 @@ void OrderManager::update_position_on_sell(const char* symbol, int quantity, flo
 }
 
 void OrderManager::set_order_callback(OrderCallback cb) {
+    MutexLock lock(m_mutex);
     m_order_callback = cb;
 }
 
 void OrderManager::set_position_callback(PositionCallback cb) {
+    MutexLock lock(m_mutex);
     m_position_callback = cb;
 }
 
 void OrderManager::load_from_database() {
     if (m_db == nullptr || !m_db->is_open()) return;
+
+    MutexLock lock(m_mutex);
 
     m_db->load_pending_orders(m_pending_orders);
     m_db->load_open_positions(m_open_positions);
@@ -472,6 +514,8 @@ void OrderManager::load_from_database() {
 void OrderManager::save_to_database() {
     if (m_db == nullptr || !m_db->is_open()) return;
 
+    MutexLock lock(m_mutex);
+
     for (const auto& pos : m_open_positions) {
         m_db->save_position(pos);
     }
@@ -486,6 +530,12 @@ void OrderManager::set_tradezero_client(TradeZeroClient* client) {
 }
 
 Order* OrderManager::find_order_by_client_id(const char* client_order_id) {
+    MutexLock lock(m_mutex);
+    return find_order_by_client_id_locked(client_order_id);
+}
+
+// Internal helper - requires m_mutex to be held
+Order* OrderManager::find_order_by_client_id_locked(const char* client_order_id) {
     if (client_order_id == nullptr) return nullptr;
 
     for (auto& order : m_pending_orders) {
@@ -497,8 +547,10 @@ Order* OrderManager::find_order_by_client_id(const char* client_order_id) {
 }
 
 void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
+    MutexLock lock(m_mutex);
+
     // Find order by client_order_id
-    Order* order = find_order_by_client_id(update.client_order_id);
+    Order* order = find_order_by_client_id_locked(update.client_order_id);
 
     // If not found, look for a pending order with temporary PENDING_ prefix
     // This handles the case where WebSocket callback runs before buy()/sell()
@@ -615,8 +667,10 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
 }
 
 void OrderManager::on_tradezero_position_update(const TZPositionUpdate& update) {
+    MutexLock lock(m_mutex);
+
     // Update local position state from Portfolio stream
-    Position* pos = find_position(update.symbol);
+    Position* pos = find_position_locked(update.symbol);
 
     int new_qty = static_cast<int>(update.shares);
 
@@ -663,6 +717,8 @@ void OrderManager::on_tradezero_position_update(const TZPositionUpdate& update) 
 }
 
 void OrderManager::on_tradezero_pnl_snapshot(const TZPnLSnapshot& snapshot) {
+    MutexLock lock(m_mutex);
+
     // Initial position sync from P&L stream
     // Note: P&L stream has position-level P&L but not full position details
     // Full position details come from Portfolio stream or REST API
@@ -683,15 +739,18 @@ void OrderManager::on_tradezero_pnl_snapshot(const TZPnLSnapshot& snapshot) {
 }
 
 const std::vector<ClosedPosition>& OrderManager::get_todays_closed_positions() const {
+    MutexLock lock(m_mutex);
     // For now, return all closed positions
     // TODO: Filter to only today's trades when we have proper timestamps
     return m_closed_positions;
 }
 
 void OrderManager::load_tradezero_positions(const std::vector<Position>& positions) {
+    MutexLock lock(m_mutex);
+
     // Merge with existing positions (prefer TradeZero data)
     for (const auto& tz_pos : positions) {
-        Position* existing = find_position(tz_pos.symbol);
+        Position* existing = find_position_locked(tz_pos.symbol);
         if (existing != nullptr) {
             // Update existing position
             existing->quantity = tz_pos.quantity;
@@ -718,12 +777,14 @@ void OrderManager::load_tradezero_positions(const std::vector<Position>& positio
 }
 
 void OrderManager::load_tradezero_orders(const std::vector<Order>& orders) {
+    MutexLock lock(m_mutex);
+
     // Load pending/active orders from TradeZero
     for (const auto& tz_order : orders) {
         // Only load orders that aren't filled or cancelled
         if (tz_order.status == OrderStatus::PENDING || tz_order.status == OrderStatus::PARTIAL) {
             // Check if we already have this order
-            Order* existing = find_order_by_client_id(tz_order.client_order_id);
+            Order* existing = find_order_by_client_id_locked(tz_order.client_order_id);
             if (existing == nullptr) {
                 // Add new order
                 m_pending_orders.push_back(tz_order);

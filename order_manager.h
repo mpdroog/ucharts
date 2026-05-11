@@ -5,6 +5,7 @@
 #include "types.h"
 #include "database.h"
 #include "market_data.h"
+#include "iqfeed_tcp.h"  // For Mutex, MutexLock, GUARDED_BY, EXCLUDES
 #include <vector>
 #include <functional>
 
@@ -27,63 +28,67 @@ public:
     // Initialize with database and market data
     void init(Database* db, MarketData* market);
 
+    // Reset to clean state (for testing)
+    void reset() EXCLUDES(m_mutex);
+
     // Place orders
-    int64_t buy(const char* symbol, int quantity, float price);
-    int64_t sell(const char* symbol, int quantity, float price);
+    int64_t buy(const char* symbol, int quantity, float price) EXCLUDES(m_mutex);
+    int64_t sell(const char* symbol, int quantity, float price) EXCLUDES(m_mutex);
 
     // Cancel orders
-    bool cancel_order(int64_t order_id);
-    bool cancel_all_orders(const char* symbol = nullptr);
+    bool cancel_order(int64_t order_id) EXCLUDES(m_mutex);
+    bool cancel_all_orders(const char* symbol = nullptr) EXCLUDES(m_mutex);
 
     // Get orders
-    const std::vector<Order>& get_pending_orders() const;
-    Order* find_order(int64_t order_id);
+    const std::vector<Order>& get_pending_orders() const EXCLUDES(m_mutex);
+    Order* find_order(int64_t order_id) EXCLUDES(m_mutex);
 
     // Get positions
-    const std::vector<Position>& get_open_positions() const;
-    const std::vector<ClosedPosition>& get_closed_positions() const;
-    Position* find_position(const char* symbol);
+    const std::vector<Position>& get_open_positions() const EXCLUDES(m_mutex);
+    const std::vector<ClosedPosition>& get_closed_positions() const EXCLUDES(m_mutex);
+    Position* find_position(const char* symbol) EXCLUDES(m_mutex);
 
     // Update positions with current market prices
-    void update_prices();
+    void update_prices() EXCLUDES(m_mutex);
 
     // Calculate position quantity for percentage sell
-    int calculate_sell_quantity(const char* symbol, int percentage);
+    int calculate_sell_quantity(const char* symbol, int percentage) EXCLUDES(m_mutex);
 
     // Set callbacks
-    void set_order_callback(OrderCallback cb);
-    void set_position_callback(PositionCallback cb);
+    void set_order_callback(OrderCallback cb) EXCLUDES(m_mutex);
+    void set_position_callback(PositionCallback cb) EXCLUDES(m_mutex);
 
     // Load from database
-    void load_from_database();
+    void load_from_database() EXCLUDES(m_mutex);
 
     // Save to database
-    void save_to_database();
+    void save_to_database() EXCLUDES(m_mutex);
 
     // TradeZero integration
     void set_tradezero_client(TradeZeroClient* client);
-    void on_tradezero_order_update(const TZOrderUpdate& update);
-    void on_tradezero_position_update(const TZPositionUpdate& update);
-    void on_tradezero_pnl_snapshot(const TZPnLSnapshot& snapshot);
-    const std::vector<ClosedPosition>& get_todays_closed_positions() const;
+    void on_tradezero_order_update(const TZOrderUpdate& update) EXCLUDES(m_mutex);
+    void on_tradezero_position_update(const TZPositionUpdate& update) EXCLUDES(m_mutex);
+    void on_tradezero_pnl_snapshot(const TZPnLSnapshot& snapshot) EXCLUDES(m_mutex);
+    const std::vector<ClosedPosition>& get_todays_closed_positions() const EXCLUDES(m_mutex);
 
     // Load initial data from TradeZero REST API
-    void load_tradezero_positions(const std::vector<Position>& positions);
-    void load_tradezero_orders(const std::vector<Order>& orders);
+    void load_tradezero_positions(const std::vector<Position>& positions) EXCLUDES(m_mutex);
+    void load_tradezero_orders(const std::vector<Order>& orders) EXCLUDES(m_mutex);
 
     // Helper to find order by client_order_id
-    Order* find_order_by_client_id(const char* client_order_id);
+    Order* find_order_by_client_id(const char* client_order_id) EXCLUDES(m_mutex);
 
 private:
+    mutable Mutex m_mutex;  // Protects all member data below
     Database* m_db;
     MarketData* m_market;
     TradeZeroClient* m_tradezero_client;
-    std::vector<Order> m_pending_orders;
-    std::vector<Position> m_open_positions;
-    std::vector<ClosedPosition> m_closed_positions;
-    int64_t m_next_order_id;
-    OrderCallback m_order_callback;
-    PositionCallback m_position_callback;
+    std::vector<Order> m_pending_orders GUARDED_BY(m_mutex);
+    std::vector<Position> m_open_positions GUARDED_BY(m_mutex);
+    std::vector<ClosedPosition> m_closed_positions GUARDED_BY(m_mutex);
+    int64_t m_next_order_id GUARDED_BY(m_mutex);
+    OrderCallback m_order_callback GUARDED_BY(m_mutex);
+    PositionCallback m_position_callback GUARDED_BY(m_mutex);
 
     void update_position_on_buy(const char* symbol, int quantity, float price);
     void update_position_on_sell(const char* symbol, int quantity, float price);
@@ -91,6 +96,11 @@ private:
 
     // Helper to parse TradeZero order status
     OrderStatus parse_tz_order_status(const char* status_str);
+
+    // Internal helper methods that require m_mutex to be held
+    Position* find_position_locked(const char* symbol);
+    Order* find_order_locked(int64_t order_id);
+    Order* find_order_by_client_id_locked(const char* client_order_id);
 };
 
 // Global order manager instance

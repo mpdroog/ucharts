@@ -101,7 +101,7 @@ static bool wait_for_pending_count(size_t expected, int timeout_ms = 2000) {
 // Reset global order manager for clean test state
 static void reset_global_om() {
     std::lock_guard<std::mutex> lock(g_om_mutex);
-    g_test_om = OrderManager();
+    g_test_om.reset();
     g_test_om.init(&g_test_db, &g_test_market);
     g_test_om.set_tradezero_client(&g_test_tz_client);
 }
@@ -217,7 +217,7 @@ TEST(database_and_order_manager_integration) {
 
     // Initialize global order manager
     ASSERT(g_test_db.init(TEST_DB));
-    g_test_om = OrderManager();  // Reset state
+    g_test_om.reset();
     g_test_om.init(&g_test_db, &g_test_market);
     g_test_om.set_tradezero_client(&g_test_tz_client);
 

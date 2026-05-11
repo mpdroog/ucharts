@@ -167,7 +167,7 @@ static void reset_order_manager() {
 
     std::lock_guard<std::mutex> lock(g_om_mutex);
     // Re-initialize the global order manager for clean test state
-    g_test_om = OrderManager();  // Reset to clean state
+    g_test_om.reset();  // Reset to clean state
     g_test_om.init(&g_test_db, &g_test_market);
     g_test_om.set_tradezero_client(&g_test_tz_client);
 }
@@ -486,7 +486,7 @@ TEST(persistence) {
     // Reset global order manager to use the persistence test database
     {
         std::lock_guard<std::mutex> lock(g_om_mutex);
-        g_test_om = OrderManager();
+        g_test_om.reset();
         g_test_om.init(&g_test_db, &g_test_market);
         g_test_om.set_tradezero_client(&g_test_tz_client);
     }
