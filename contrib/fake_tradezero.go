@@ -79,10 +79,16 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 	ordersMu.RLock()
 	defer ordersMu.RUnlock()
 
-	w.Header().Set("Content-Type", "application/json")
 	// API returns array directly, not wrapped in object
-	if err := json.NewEncoder(w).Encode(orders); err != nil {
+	data, err := json.Marshal(orders)
+	if err != nil {
 		logError("REST: Failed to encode orders response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(data); err != nil {
+		logError("REST: Failed to write orders response: %v", err)
 	}
 }
 
@@ -136,7 +142,6 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	// Buy fills if limit >= ask, Sell fills if limit <= bid
 	go simulateFill(orderID, req.Side, req.LimitPrice, req.Quantity)
 
-	w.Header().Set("Content-Type", "application/json")
 	// Return full order object per API spec (tradezero-order.txt lines 99-111)
 	resp := map[string]interface{}{
 		"clientOrderId":  orderID,
@@ -149,8 +154,15 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		"orderStatus":    "new",
 		"timestamp":      time.Now().Format(time.RFC3339),
 	}
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	data, err := json.Marshal(resp)
+	if err != nil {
 		logError("REST: Failed to encode place order response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(data); err != nil {
+		logError("REST: Failed to write place order response: %v", err)
 	}
 }
 
@@ -244,9 +256,15 @@ func handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 
 	if cancelledOrder != nil {
 		broadcastEvent(*cancelledOrder)
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]bool{"success": true}); err != nil {
+		data, err := json.Marshal(map[string]bool{"success": true})
+		if err != nil {
 			logError("REST: Failed to encode cancel order response: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write(data); err != nil {
+			logError("REST: Failed to write cancel order response: %v", err)
 		}
 	} else {
 		http.Error(w, "Order not found", http.StatusNotFound)
@@ -270,9 +288,15 @@ func handleCancelAllOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	ordersMu.Unlock()
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]bool{"success": true}); err != nil {
+	data, err := json.Marshal(map[string]bool{"success": true})
+	if err != nil {
 		logError("REST: Failed to encode cancel all orders response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(data); err != nil {
+		logError("REST: Failed to write cancel all orders response: %v", err)
 	}
 }
 
@@ -292,9 +316,15 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 
 	logInfo("REST: POST reset - cleared %d orders", oldOrderCount)
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]bool{"success": true}); err != nil {
+	data, err := json.Marshal(map[string]bool{"success": true})
+	if err != nil {
 		logError("REST: Failed to encode reset response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(data); err != nil {
+		logError("REST: Failed to write reset response: %v", err)
 	}
 }
 
@@ -303,28 +333,28 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 func broadcastEvent(order MockOrder) {
 	// Order data is nested inside "order" object per API spec
 	orderData := map[string]interface{}{
-		"accountId":       "test_account",
-		"clientOrderId":   order.ClientOrderID,
-		"symbol":          order.Symbol,
-		"tradedSymbol":    order.Symbol,
-		"side":            order.Side,
-		"orderStatus":     order.OrderStatus,
-		"orderType":       "Limit",
-		"orderQuantity":   order.OrderQuantity,
-		"executed":        order.Executed,
-		"leavesQuantity":  order.OrderQuantity - order.Executed,
+		"accountId":        "test_account",
+		"clientOrderId":    order.ClientOrderID,
+		"symbol":           order.Symbol,
+		"tradedSymbol":     order.Symbol,
+		"side":             order.Side,
+		"orderStatus":      order.OrderStatus,
+		"orderType":        "Limit",
+		"orderQuantity":    order.OrderQuantity,
+		"executed":         order.Executed,
+		"leavesQuantity":   order.OrderQuantity - order.Executed,
 		"canceledQuantity": 0,
-		"limitPrice":      order.LimitPrice,
-		"priceAvg":        order.PriceAvg,
-		"priceStop":       0.0,
-		"lastPrice":       order.PriceAvg,
-		"lastQuantity":    order.Executed,
-		"route":           "SIM",
-		"securityType":    "Stock",
-		"timeInForce":     "Day",
-		"openClose":       "Open",
-		"startTime":       time.Now().Format(time.RFC3339),
-		"lastUpdated":     time.Now().Format(time.RFC3339),
+		"limitPrice":       order.LimitPrice,
+		"priceAvg":         order.PriceAvg,
+		"priceStop":        0.0,
+		"lastPrice":        order.PriceAvg,
+		"lastQuantity":     order.Executed,
+		"route":            "SIM",
+		"securityType":     "Stock",
+		"timeInForce":      "Day",
+		"openClose":        "Open",
+		"startTime":        time.Now().Format(time.RFC3339),
+		"lastUpdated":      time.Now().Format(time.RFC3339),
 	}
 
 	event := map[string]interface{}{
@@ -587,7 +617,7 @@ func main() {
 
 	// HTTP REST API server
 	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/v1/api/reset", handleReset)  // Test endpoint to clear state
+	httpMux.HandleFunc("/v1/api/reset", handleReset) // Test endpoint to clear state
 	httpMux.HandleFunc("/v1/api/accounts/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.HasSuffix(path, "/positions") {

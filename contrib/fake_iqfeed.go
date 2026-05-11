@@ -20,7 +20,6 @@ import (
 	"time"
 )
 
-
 func logInfo(format string, args ...interface{}) {
 	ts := time.Now().Format("15:04:05")
 	fmt.Printf("[%s][INFO] %s\n", ts, fmt.Sprintf(format, args...))
@@ -476,13 +475,21 @@ func runTCPServer(ctx context.Context, wg *sync.WaitGroup, port int, name string
 		logError("Failed to start %s server on port %d: %v", name, port, err)
 		return
 	}
-	defer listener.Close()
+
+	// Use sync.Once to ensure listener is closed exactly once
+	var closeOnce sync.Once
+	closeListener := func() {
+		closeOnce.Do(func() {
+			listener.Close()
+		})
+	}
+	defer closeListener()
 
 	logInfo("%s server listening on port %d", name, port)
 
 	go func() {
 		<-ctx.Done()
-		listener.Close()
+		closeListener() // Unblock Accept() on context cancellation
 	}()
 
 	for {
