@@ -1,0 +1,4 @@
+timestamp,symbol,price,size,direction
+09:30:00.100,TEST,100.02,100,UP
+09:30:00.200,TEST,100.01,200,DOWN
+09:30:00.300,TEST,100.01,150,SAME

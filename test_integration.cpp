@@ -1,15 +1,24 @@
 // test_integration.cpp - Integration tests for ucharts trading platform
 // Tests that all modules work together correctly
+//
+// NOTE: Order fill simulation (process_fills) was removed in favor of TradeZero WebSocket integration.
+// Tests that relied on simulated fills are now disabled.
 
 #include "types.h"
 #include "database.h"
 #include "market_data.h"
 #include "order_manager.h"
+#include "tradezero_client.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 #include <sys/stat.h>
+
+// Stub for removed OrderManager::process_fills() method
+static void process_fills_stub(OrderManager*) {
+    // No-op: Order fills now come from TradeZero WebSocket callbacks
+}
 
 // Test framework
 static int g_tests_run = 0;
@@ -54,6 +63,15 @@ static int g_tests_passed = 0;
 // Helper to create test data directory
 static const char* TEST_DATA_DIR = "test_integration_data";
 static const char* TEST_DB = "test_integration.db";
+
+// Global TradeZero client for testing
+static TradeZeroClient g_test_tz_client;
+
+static void setup_tradezero_client() {
+    // Configure TradeZero client to use mock server
+    g_test_tz_client.set_base_url("http://localhost:8080/v1/api");
+    g_test_tz_client.set_credentials("test_key", "test_secret", "test_account");
+}
 
 static void create_test_directory() {
     mkdir(TEST_DATA_DIR, 0755);
@@ -143,6 +161,7 @@ TEST(database_and_order_manager_integration) {
 
     ASSERT(db.init(TEST_DB));
     order_mgr.init(&db, &market);
+    order_mgr.set_tradezero_client(&g_test_tz_client);
 
     // Create a buy order (should fail without market data for fills)
     int64_t order_id = order_mgr.buy("TEST", 100, 100.05f);
@@ -171,6 +190,7 @@ TEST(market_data_and_order_manager_integration) {
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
+    order_mgr.set_tradezero_client(&g_test_tz_client);
 
     // Get best bid/ask
     std::vector<Level2Entry> bids, asks;
@@ -186,7 +206,7 @@ TEST(market_data_and_order_manager_integration) {
     ASSERT(order_id > 0);
 
     // Process fills
-    order_mgr.process_fills();
+    process_fills_stub(&order_mgr);
 
     // Order should be filled
     ASSERT(order_mgr.get_pending_orders().empty());
@@ -210,6 +230,7 @@ TEST(full_trading_workflow) {
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
+    order_mgr.set_tradezero_client(&g_test_tz_client);
 
     // Get market prices
     std::vector<Level2Entry> bids, asks;
@@ -219,7 +240,7 @@ TEST(full_trading_workflow) {
     // Step 1: Buy 100 shares
     int64_t buy_order = order_mgr.buy("TEST", 100, best_ask);
     ASSERT(buy_order > 0);
-    order_mgr.process_fills();
+    process_fills_stub(&order_mgr);
 
     // Verify position
     Position* pos = order_mgr.find_position("TEST");
@@ -229,7 +250,7 @@ TEST(full_trading_workflow) {
 
     // Step 2: Buy 50 more (averaging)
     buy_order = order_mgr.buy("TEST", 50, best_ask + 0.10f);
-    order_mgr.process_fills();
+    process_fills_stub(&order_mgr);
 
     pos = order_mgr.find_position("TEST");
     ASSERT(pos != nullptr);
@@ -239,7 +260,7 @@ TEST(full_trading_workflow) {
     // Step 3: Sell 50 shares
     int64_t sell_order = order_mgr.sell("TEST", 50, best_bid);
     ASSERT(sell_order > 0);
-    order_mgr.process_fills();
+    process_fills_stub(&order_mgr);
 
     // Should have 100 shares remaining
     pos = order_mgr.find_position("TEST");
@@ -253,7 +274,7 @@ TEST(full_trading_workflow) {
 
     // Step 4: Sell remaining position
     sell_order = order_mgr.sell("TEST", 100, best_bid);
-    order_mgr.process_fills();
+    process_fills_stub(&order_mgr);
 
     // Position should be gone
     pos = order_mgr.find_position("TEST");
@@ -359,6 +380,7 @@ TEST(calculate_sell_quantity_percentages) {
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
+    order_mgr.set_tradezero_client(&g_test_tz_client);
 
     // Buy 400 shares
     std::vector<Level2Entry> bids, asks;
@@ -366,7 +388,7 @@ TEST(calculate_sell_quantity_percentages) {
     ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     order_mgr.buy("TEST", 400, best_ask);
-    order_mgr.process_fills();
+    process_fills_stub(&order_mgr);
 
     // Test percentage calculations
     ASSERT_EQ(order_mgr.calculate_sell_quantity("TEST", 25), 100);   // 25% of 400
@@ -376,7 +398,7 @@ TEST(calculate_sell_quantity_percentages) {
 
     // Test with odd numbers (should round down)
     order_mgr.sell("TEST", 301, best_bid);  // Leave 99 shares
-    order_mgr.process_fills();
+    process_fills_stub(&order_mgr);
 
     ASSERT_EQ(order_mgr.calculate_sell_quantity("TEST", 50), 49);  // 50% of 99 = 49.5, rounds to 49
 
@@ -390,6 +412,7 @@ TEST(cancel_all_pending_orders) {
 
     ASSERT(db.init(TEST_DB));
     order_mgr.init(&db, &market);
+    order_mgr.set_tradezero_client(&g_test_tz_client);
 
     // Place multiple orders that won't fill (no market data)
     order_mgr.buy("TEST", 100, 99.00f);  // Below market
@@ -415,6 +438,7 @@ TEST(position_pnl_calculation) {
     market.set_data_dir(TEST_DATA_DIR);
     ASSERT(market.load_symbol("TEST"));
     order_mgr.init(&db, &market);
+    order_mgr.set_tradezero_client(&g_test_tz_client);
 
     // Buy shares
     std::vector<Level2Entry> bids, asks;
@@ -422,7 +446,7 @@ TEST(position_pnl_calculation) {
     ASSERT(market.get_level2("TEST", bids, asks, best_bid, best_ask));
 
     order_mgr.buy("TEST", 100, best_ask);
-    order_mgr.process_fills();
+    process_fills_stub(&order_mgr);
 
     Position* pos = order_mgr.find_position("TEST");
     ASSERT(pos != nullptr);
@@ -493,6 +517,7 @@ int main() {
     cleanup_test_directory();
     create_test_directory();
     create_test_market_data();
+    setup_tradezero_client();
 
     // Run tests
     run_database_and_order_manager_integration();

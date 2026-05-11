@@ -133,6 +133,7 @@ public:
 
     // Configuration
     void set_credentials(const char* api_key_id, const char* api_secret_key, const char* account_id);
+    void set_url(const char* host, int port, bool use_ssl = true);  // Override URL (for testing with mock server)
 
     // Connection management
     bool connect(TZStream stream) EXCLUDES(m_mutex);
@@ -165,6 +166,9 @@ private:
     char m_api_secret_key[128];
     char m_account_id[32];
     char m_error[256];
+    char m_host[128];      // Custom host (empty = production)
+    int m_port;            // Custom port (0 = default)
+    bool m_use_ssl;        // Whether to use SSL
     TZStream m_stream;
 
     // Thread management

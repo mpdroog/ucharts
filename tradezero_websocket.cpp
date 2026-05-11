@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 #include <cstring>
 #include <cstdio>
+#include <new>  // For placement new
 
 using json = nlohmann::json;
 
@@ -78,60 +79,79 @@ TZPositionUpdate::TZPositionUpdate()
 // TradeZeroWebSocket implementation
 // ============================================================================
 
-// Per-connection user data
-struct ConnectionData {
-    TradeZeroWebSocket* client;
-    std::string message_buffer;
-    std::vector<uint8_t> write_buffer;  // Buffer for outgoing message with LWS_PRE padding
+// Forward declaration
+static int websocket_callback(struct lws* wsi, enum lws_callback_reasons reason,
+                              void* user, void* in, size_t len);
+
+// Simple approach: track active client (only one at a time for now)
+static TradeZeroWebSocket* g_active_ws_client = nullptr;
+
+// Simplified approach: don't use libwebsockets per-session data
+// Just use the global g_active_ws_client pointer directly
+// This avoids memory corruption issues with placement new
+
+// libwebsockets protocols array - minimal per-session data
+static struct lws_protocols protocols[] = {
+    {
+        "tradezero-protocol",       // protocol name
+        websocket_callback,          // callback
+        0,                           // NO per-session data
+        4096,                        // rx buffer size
+        0,                           // id (unused)
+        nullptr,                     // user pointer
+        0                            // tx packet size
+    },
+    { nullptr, nullptr, 0, 0, 0, nullptr, 0 }  // terminator
 };
 
-// libwebsockets callback
-[[maybe_unused]] static int websocket_callback(struct lws* wsi, enum lws_callback_reasons reason,
+// libwebsockets callback - uses g_active_ws_client directly
+static int websocket_callback(struct lws* wsi, enum lws_callback_reasons reason,
                               void* user, void* in, size_t len) {
-    ConnectionData* conn_data = static_cast<ConnectionData*>(user);
+    (void)user;  // Unused - we use g_active_ws_client instead
+
+    TradeZeroWebSocket* client = g_active_ws_client;
 
     if (reason == LWS_CALLBACK_CLIENT_ESTABLISHED) {
-        if (conn_data && conn_data->client) {
-            LOG_I("tradezero_ws", "WebSocket connection established");
-            // Send authentication message
-            conn_data->client->send_auth_message();
+        LOG_I("tradezero_ws", "WebSocket connection established");
+        if (client) {
+            client->send_auth_message();
         }
         return 0;
     }
 
     else if (reason == LWS_CALLBACK_CLIENT_RECEIVE) {
-        if (conn_data && conn_data->client && in && len > 0) {
+        if (client && in && len > 0) {
             std::string message(static_cast<const char*>(in), len);
-            conn_data->client->handle_message(message);
+            client->handle_message(message);
         }
         return 0;
     }
 
     else if (reason == LWS_CALLBACK_CLIENT_WRITEABLE) {
-        if (!conn_data || !conn_data->client) {
+        if (!client) {
             return 0;
         }
 
         // Check if there are messages to send
-        if (!conn_data->client->has_queued_messages()) {
+        if (!client->has_queued_messages()) {
             return 0;
         }
 
         // Get next message from queue
-        std::string msg = conn_data->client->dequeue_message();
+        std::string msg = client->dequeue_message();
         if (msg.empty()) {
             return 0;
         }
 
         // Allocate buffer with LWS_PRE bytes padding before the message
         size_t msg_len = msg.size();
-        conn_data->write_buffer.resize(LWS_PRE + msg_len);
+        std::vector<uint8_t> write_buffer(LWS_PRE + msg_len);
 
         // Copy message after LWS_PRE padding
-        std::memcpy(&conn_data->write_buffer[LWS_PRE], msg.c_str(), msg_len);
+        std::memcpy(&write_buffer[LWS_PRE], msg.c_str(), msg_len);
 
-        // Write message (binary mode for JSON)
-        int written = lws_write(wsi, &conn_data->write_buffer[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+        // Write message (text mode for JSON)
+        int written = lws_write(wsi, &write_buffer[LWS_PRE], msg_len, LWS_WRITE_TEXT);
 
         if (written < 0) {
             LOG_E("tradezero_ws", "Error writing to WebSocket");
@@ -145,7 +165,7 @@ struct ConnectionData {
         }
 
         // Request another callback if more messages are queued
-        if (conn_data->client->has_queued_messages()) {
+        if (client->has_queued_messages()) {
             lws_callback_on_writable(wsi);
         }
 
@@ -153,17 +173,13 @@ struct ConnectionData {
     }
 
     else if (reason == LWS_CALLBACK_CLIENT_CONNECTION_ERROR) {
-        if (conn_data && conn_data->client) {
-            const char* error_msg = in ? static_cast<const char*>(in) : "unknown error";
-            LOG_E("tradezero_ws", "Connection error: %s", error_msg);
-        }
+        const char* error_msg = in ? static_cast<const char*>(in) : "unknown error";
+        LOG_E("tradezero_ws", "Connection error: %s", error_msg);
         return -1;
     }
 
     else if (reason == LWS_CALLBACK_CLIENT_CLOSED) {
-        if (conn_data && conn_data->client) {
-            LOG_W("tradezero_ws", "WebSocket connection closed - will attempt reconnect");
-        }
+        LOG_W("tradezero_ws", "WebSocket connection closed - will attempt reconnect");
         return 0;
     }
 
@@ -172,13 +188,14 @@ struct ConnectionData {
 }
 
 TradeZeroWebSocket::TradeZeroWebSocket()
-    : m_stream(TZStream::PNL), m_running(false), m_connected(false),
+    : m_port(0), m_use_ssl(true), m_stream(TZStream::PNL), m_running(false), m_connected(false),
       m_authenticated(false), m_lws_context(nullptr), m_lws_connection(nullptr),
       m_reconnect_attempts(0), m_should_reconnect(true) {
     m_api_key_id[0] = '\0';
     m_api_secret_key[0] = '\0';
     m_account_id[0] = '\0';
     m_error[0] = '\0';
+    m_host[0] = '\0';
 }
 
 TradeZeroWebSocket::~TradeZeroWebSocket() {
@@ -186,6 +203,9 @@ TradeZeroWebSocket::~TradeZeroWebSocket() {
 }
 
 void TradeZeroWebSocket::set_credentials(const char* api_key_id, const char* api_secret_key, const char* account_id) {
+    LOG_I("tradezero_ws", "set_credentials: this=%p, key='%s', secret='%s'",
+          static_cast<void*>(this), api_key_id, api_secret_key);
+
     std::strncpy(m_api_key_id, api_key_id, sizeof(m_api_key_id) - 1);
     m_api_key_id[sizeof(m_api_key_id) - 1] = '\0';
 
@@ -194,6 +214,19 @@ void TradeZeroWebSocket::set_credentials(const char* api_key_id, const char* api
 
     std::strncpy(m_account_id, account_id, sizeof(m_account_id) - 1);
     m_account_id[sizeof(m_account_id) - 1] = '\0';
+
+    LOG_I("tradezero_ws", "set_credentials done: m_api_key_id='%s'", m_api_key_id);
+}
+
+void TradeZeroWebSocket::set_url(const char* host, int port, bool use_ssl) {
+    if (host != nullptr) {
+        std::strncpy(m_host, host, sizeof(m_host) - 1);
+        m_host[sizeof(m_host) - 1] = '\0';
+    } else {
+        m_host[0] = '\0';
+    }
+    m_port = port;
+    m_use_ssl = use_ssl;
 }
 
 bool TradeZeroWebSocket::connect(TZStream stream) {
@@ -201,6 +234,9 @@ bool TradeZeroWebSocket::connect(TZStream stream) {
         LOG_W("tradezero_ws", "Already connected");
         return true;
     }
+
+    LOG_I("tradezero_ws", "connect: this=%p, m_api_key_id='%s' before thread",
+          static_cast<void*>(this), m_api_key_id);
 
     m_stream = stream;
     m_running.store(true);
@@ -278,7 +314,11 @@ const char* TradeZeroWebSocket::last_error() const {
 }
 
 void TradeZeroWebSocket::worker_thread() {
-    LOG_I("tradezero_ws", "Worker thread started");
+    LOG_I("tradezero_ws", "Worker thread started: this=%p, m_api_key_id='%s'",
+          static_cast<void*>(this), m_api_key_id);
+
+    // Set active client for callback access
+    g_active_ws_client = this;
 
     // Determine endpoint
     const char* path = (m_stream == TZStream::PNL) ? "/stream/pnl" : "/stream/portfolio";
@@ -287,10 +327,15 @@ void TradeZeroWebSocket::worker_thread() {
     struct lws_context_creation_info info;
     memset(&info, 0, sizeof(info));
     info.port = CONTEXT_PORT_NO_LISTEN;
-    info.protocols = nullptr;  // Will be set dynamically
+    info.protocols = protocols;  // Use our protocols array
     info.gid = static_cast<gid_t>(-1);
     info.uid = static_cast<uid_t>(-1);
     info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+
+    // Keepalive configuration to prevent idle disconnects
+    info.ka_time = 30;       // Start keepalive after 30 seconds idle
+    info.ka_probes = 3;      // Send 3 probes before giving up
+    info.ka_interval = 10;   // 10 seconds between probes
 
     m_lws_context = lws_create_context(&info);
     if (m_lws_context == nullptr) {
@@ -300,19 +345,32 @@ void TradeZeroWebSocket::worker_thread() {
         return;
     }
 
-    // Connection info
+    // Connection info - use custom URL if set, otherwise production
     struct lws_client_connect_info ccinfo;
     memset(&ccinfo, 0, sizeof(ccinfo));
     ccinfo.context = m_lws_context;
-    ccinfo.address = "webapi.tradezero.com";
-    ccinfo.port = 443;
+
+    if (m_host[0] != '\0') {
+        // Use custom URL (for testing with mock server)
+        ccinfo.address = m_host;
+        ccinfo.port = m_port;
+        ccinfo.ssl_connection = m_use_ssl ?
+            (LCCSCF_USE_SSL | LCCSCF_ALLOW_SELFSIGNED | LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK) : 0;
+    } else {
+        // Production URL
+        ccinfo.address = "webapi.tradezero.com";
+        ccinfo.port = 443;
+        ccinfo.ssl_connection = LCCSCF_USE_SSL | LCCSCF_ALLOW_SELFSIGNED | LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK;
+    }
+
     ccinfo.path = path;
     ccinfo.host = ccinfo.address;
     ccinfo.origin = ccinfo.address;
-    ccinfo.protocol = ""; // Empty for default
-    ccinfo.ssl_connection = LCCSCF_USE_SSL | LCCSCF_ALLOW_SELFSIGNED | LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK;
+    ccinfo.local_protocol_name = protocols[0].name;  // Use our protocol
+    ccinfo.userdata = this;  // Pass client pointer as userdata
 
-    LOG_I("tradezero_ws", "Connecting to wss://%s%s...", ccinfo.address, path);
+    const char* scheme = m_use_ssl ? "wss" : "ws";
+    LOG_I("tradezero_ws", "Connecting to %s://%s:%d%s...", scheme, ccinfo.address, ccinfo.port, path);
 
     // Attempt WebSocket connection
     struct lws* wsi = lws_client_connect_via_info(&ccinfo);
@@ -347,10 +405,24 @@ void TradeZeroWebSocket::worker_thread() {
         m_lws_context = nullptr;
     }
 
+    // Clear active client
+    if (g_active_ws_client == this) {
+        g_active_ws_client = nullptr;
+    }
+
     LOG_I("tradezero_ws", "Worker thread stopped");
 }
 
 void TradeZeroWebSocket::handle_message(const std::string& message) {
+    // Debug: log first few bytes of message
+    if (message.size() > 0) {
+        LOG_I("tradezero_ws", "Received message len=%zu, first bytes: 0x%02X 0x%02X 0x%02X",
+              message.size(),
+              static_cast<unsigned char>(message[0]),
+              message.size() > 1 ? static_cast<unsigned char>(message[1]) : 0,
+              message.size() > 2 ? static_cast<unsigned char>(message[2]) : 0);
+    }
+
     // Parse JSON once to determine message type (more robust than string matching)
     try {
         auto j = json::parse(message);
@@ -433,14 +505,21 @@ void TradeZeroWebSocket::parse_system_message(const std::string& json_str) {
 }
 
 void TradeZeroWebSocket::send_auth_message() {
-    json auth_msg = {
-        {"key", m_api_key_id},
-        {"secret", m_api_secret_key}
-    };
+    LOG_I("tradezero_ws", "send_auth_message: this=%p, key='%s' (len=%zu)",
+          static_cast<void*>(this), m_api_key_id, std::strlen(m_api_key_id));
 
-    std::string msg = auth_msg.dump();
-    LOG_I("tradezero_ws", "Queueing auth message");
-    queue_message(msg);
+    try {
+        json auth_msg = {
+            {"key", m_api_key_id},
+            {"secret", m_api_secret_key}
+        };
+
+        std::string msg = auth_msg.dump();
+        LOG_I("tradezero_ws", "Queueing auth message: %s", msg.c_str());
+        queue_message(msg);
+    } catch (const std::exception& e) {
+        LOG_E("tradezero_ws", "Failed to create auth message: %s", e.what());
+    }
 }
 
 void TradeZeroWebSocket::send_subscribe_message() {

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <ctime>
+#include <csignal>
 #include <string>
 #include <vector>
 #include <thread>
@@ -24,6 +25,12 @@
 #include <poll.h>
 
 static std::atomic<bool> g_running{true};
+
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    g_running.store(false);
+}
 
 // ============================================================================
 // Utilities
@@ -457,6 +464,10 @@ int main(int argc, char* argv[]) {
     }
 
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+    // Setup signal handlers for graceful shutdown
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
 
     log_info("Starting fake IQFeed server");
     log_info("Lookup port: %d", lookup_port);

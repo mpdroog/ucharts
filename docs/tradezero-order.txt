@@ -1,0 +1,467 @@
+Trading and Orders
+
+The Trading APIs provide complete programmatic access to TradeZero's order management system, allowing you to place orders, modify and cancel orders, retrieve real-time positions, and access order history and execution details. These APIs enable you to build sophisticated trading applications, programmatic trading tools, and custom trading interfaces.
+Overview
+
+The Trading APIs enable you to:
+
+    Place new orders with multiple order types and time-in-force options
+    Modify or cancel existing orders
+    Retrieve real-time position information with P&L calculations
+    Access order history and execution reports
+    Monitor order status changes and fills
+
+Create Order
+POST /v1/api/accounts/{accountId}/order
+
+Place a new order for equities, ETFs, or options. Supports multiple order types including market, limit, stop, and stop-limit orders with various time-in-force options.
+Use Cases
+
+    Custom Trading Interfaces - Build tailored order entry systems for specific workflows
+    Basket Trading - Submit multiple orders across different symbols programmatically
+    Position Management - Programmatically manage and close positions based on your trading decisions
+    Order Execution - Execute trades via code based on your own analysis and market views
+    Portfolio Control - Programmatic access to submit orders across multiple symbols
+
+Request Example
+Market Order - CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/order' \
+-X POST \
+-H 'Accept: application/json' \
+-H 'Content-Type: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}' \
+-d '{
+  "symbol": "AAPL",
+  "quantity": 100,
+  "side": "buy",
+  "orderType": "market",
+  "timeInForce": "day"
+}'
+
+Limit Order - CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/order' \
+-X POST \
+-H 'Accept: application/json' \
+-H 'Content-Type: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}' \
+-d '{
+  "symbol": "TSLA",
+  "quantity": 50,
+  "side": "sell",
+  "orderType": "limit",
+  "limitPrice": 250.00,
+  "timeInForce": "gtc"
+}'
+
+Stop-Loss Order - CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/order' \
+-X POST \
+-H 'Accept: application/json' \
+-H 'Content-Type: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}' \
+-d '{
+  "symbol": "SPY",
+  "quantity": 200,
+  "side": "sell",
+  "orderType": "stop",
+  "stopPrice": 445.00,
+  "timeInForce": "day"
+}'
+
+Request Parameters
+Parameter	Type	Required	Description
+symbol	string	Yes	Trading symbol (e.g., "AAPL", "SPY")
+quantity	integer	Yes	Number of shares to trade
+side	string	Yes	Order side: "buy" or "sell"
+orderType	string	Yes	Order type: "market", "limit", "stop", "stop_limit"
+limitPrice	number	Conditional	Required for limit and stop-limit orders
+stopPrice	number	Conditional	Required for stop and stop-limit orders
+timeInForce	string	Yes	"day", "gtc" (Good-Til-Canceled), "ioc" (Immediate-or-Cancel), "fok" (Fill-or-Kill)
+route	string	No	Routing destination (defaults to smart routing)
+clientOrderId	string	No	Your custom order identifier for tracking
+Response Structure
+Field	Type	Description
+clientOrderId	string	Your custom order ID (or auto-generated if not provided)
+symbol	string	Trading symbol
+side	string	Buy or sell
+orderType	string	Type of order
+quantity	integer	Order quantity
+filledQuantity	integer	Quantity filled so far
+averagePrice	number	Average execution price
+orderStatus	string	Current status: "new", "partially_filled", "filled", "canceled", "rejected"
+timestamp	string	Order creation timestamp (ISO 8601)
+Response Example
+
+{
+  "clientOrderId": "MY_ORDER_001",
+  "symbol": "AAPL",
+  "side": "buy",
+  "orderType": "market",
+  "quantity": 100,
+  "filledQuantity": 0,
+  "averagePrice": 0.00,
+  "orderStatus": "new",
+  "timestamp": "2025-11-28T14:30:00.000Z"
+}
+
+Order Types Explained
+
+Market Orders
+
+    Execute immediately at the best available price
+    Guaranteed fill but not guaranteed price
+    Best for high-liquidity stocks and urgent executions
+
+Limit Orders
+
+    Execute only at specified price or better
+    Guaranteed price but not guaranteed fill
+    Best for controlling entry/exit prices
+
+Stop Orders
+
+    Trigger a market order when stop price is reached
+    Used for stop-losses and breakout entries
+    Becomes market order once triggered
+
+Stop-Limit Orders
+
+    Trigger a limit order when stop price is reached
+    Provides price control after trigger
+    May not fill if market moves too quickly
+
+Retrieve Orders
+GET /v1/api/accounts/{accountId}/orders
+
+Retrieve all orders from today for the specified account. Returns orders in all statuses including pending, filled, partially filled, canceled, and rejected orders.
+Use Cases
+
+    Order Monitoring - Track status of submitted orders in real-time
+    Execution Dashboard - Display order book and execution history
+    Reconciliation - Match internal order records with broker confirmations
+    Performance Analytics - Analyze fill rates and execution quality
+    Compliance - Audit trail for order activity
+
+Request Example
+CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/orders' \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+Response Structure
+
+Returns an array of order objects with the following fields:
+Field	Type	Description
+accountId	string	The user's account ID
+canceledQuantity	number	Shares of the order that was canceled
+clientOrderId	string	Your custom order ID (or auto-generated if not provided)
+executed	number	Shares of the order that was executed
+lastPrice	number	The last price the order was executed at
+lastQuantity	number	The last quantity of the order that was executed
+lastUpdated	string	The last time the order was updated (ISO 8601 format)
+leavesQuantity	number	The remaining quantity of the order
+limitPrice	number	The limit price of the order
+maintenanceRequirement	number	The maintenance requirement for the order
+marginRequirement	number	The margin requirement for the order
+maxDisplayQuantity	number	Optional maximum quantity to display
+openClose	string	Open or close position indicator (for options)
+orderQuantity	number	The total quantity of the order
+orderStatus	string	Current status of the order (e.g., Pending, Filled, Canceled, Rejected)
+orderType	string	The type of order (limit, market, stop, etc.)
+pegDifference	number	The offset amount for pegged orders
+pegOffsetType	string	The type of offset for pegged orders (Price or Percentage)
+priceAvg	number	The average execution price for the order
+priceStop	number	The stop price for stop or stop-limit orders
+route	string	The routing destination for the order (e.g., SMART, SIM, TEST)
+securityType	string	The type of security (stock, option)
+side	string	The side of the order (buy, sell)
+startTime	string	The time when the order was created/submitted (ISO 8601 format)
+strikePrice	number	The strike price for options contracts
+symbol	string	The security symbol for the order
+text	string	Optional text for the order, typically contains error messages
+timeInForce	string	The time in force for the order (Day, Good Till Cancel, Immediate or Cancel, Fill or Kill, etc.)
+Response Example
+
+[
+  {
+    "accountId": "TZ12345678",
+    "canceledQuantity": 0,
+    "clientOrderId": "MY_ORDER_001",
+    "executed": 100,
+    "lastPrice": 175.48,
+    "lastQuantity": 100,
+    "lastUpdated": "2025-11-28T09:30:18.000Z",
+    "leavesQuantity": 0,
+    "limitPrice": 175.50,
+    "maintenanceRequirement": 0,
+    "marginRequirement": 0,
+    "maxDisplayQuantity": 0,
+    "openClose": "Open",
+    "orderQuantity": 100,
+    "orderStatus": "filled",
+    "orderType": "limit",
+    "pegDifference": 0,
+    "pegOffsetType": "",
+    "priceAvg": 175.48,
+    "priceStop": 0,
+    "route": "SMART",
+    "securityType": "stock",
+    "side": "buy",
+    "startTime": "2025-11-28T09:30:15.000Z",
+    "strikePrice": 0,
+    "symbol": "AAPL",
+    "text": "",
+    "timeInForce": "day"
+  },
+  {
+    "accountId": "TZ12345678",
+    "canceledQuantity": 0,
+    "clientOrderId": "MY_ORDER_002",
+    "executed": 25,
+    "lastPrice": 250.10,
+    "lastQuantity": 25,
+    "lastUpdated": "2025-11-28T10:16:45.000Z",
+    "leavesQuantity": 25,
+    "limitPrice": 250.00,
+    "maintenanceRequirement": 0,
+    "marginRequirement": 0,
+    "maxDisplayQuantity": 0,
+    "openClose": "Open",
+    "orderQuantity": 50,
+    "orderStatus": "Partially Filled",
+    "orderType": "limit",
+    "pegDifference": 0,
+    "pegOffsetType": "",
+    "priceAvg": 250.10,
+    "priceStop": 0,
+    "route": "SMART",
+    "securityType": "stock",
+    "side": "sell",
+    "startTime": "2025-11-28T10:15:30.000Z",
+    "strikePrice": 0,
+    "symbol": "TSLA",
+    "text": "",
+    "timeInForce": "gtc"
+  }
+]
+
+Order Status Values
+
+    new - Order accepted but not yet filled
+    partially_filled - Some quantity executed, remainder still active
+    filled - Order completely executed
+    canceled - Order canceled by user or system
+    rejected - Order rejected due to validation errors or insufficient buying power
+    pending_cancel - Cancellation request submitted but not yet confirmed
+
+Retrieve Historical Orders
+GET /v1/api/accounts/{accountId}/orders/startDate/{startDate}
+
+Retrieve order history for a specified date range. Useful for analyzing past trading activity and generating reports.
+Use Cases
+
+    Historical Analysis - Review past trading patterns and decisions
+    Performance Reporting - Generate monthly or quarterly trading reports
+    Tax Preparation - Export order data for tax reporting
+    Execution Analysis - Compare actual executions with expected outcomes
+    Audit Compliance - Maintain detailed records of all trading activity
+
+Request Example
+CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/orders/startDate/2025-11-01' \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+You can also specify an end date as a query parameter:
+CURL Example with Date Range
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/orders/startDate/2025-11-01?endDate=2025-11-28' \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+Retrieve Positions
+GET /v1/api/accounts/{accountId}/positions
+
+Retrieve all open positions for the account with real-time market values, P&L calculations, and cost basis information.
+Use Cases
+
+    Position Monitoring - Track open positions in real-time dashboards
+    Risk Management - Monitor exposure by symbol, sector, or asset class
+    P&L Tracking - Calculate unrealized gains and losses
+    Portfolio Rebalancing - Identify positions that need adjustment
+    Margin Management - Monitor positions consuming buying power
+
+Request Example
+CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/positions' \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+Response Structure
+
+Returns an array of position objects:
+Field	Type	Description
+accountId	string	The account ID
+symbol	string	The security symbol for the position
+tradedSymbol	string	The traded symbol (same as symbol for stocks, OCC format for options)
+rootSymbol	string	The underlying symbol (for options, otherwise same as symbol)
+securityType	string	The type of security ("stock", "option")
+shares	number	The total number of shares in the position (positive for long, negative for short)
+side	string	The side of the position ("Long", "Short")
+priceAvg	number	The average execution price for the position
+priceOpen	number	The opening price for the position
+priceClose	number	The closing price for the position
+priceStrike	number	The strike price (for options only)
+putCall	string	Type of option: "Put" or "Call" (for options only)
+dayOvernight	string	Indicates whether the position is a day trade or overnight position
+createdDate	string	The time when the position was created (ISO 8601 format)
+updatedDate	string	The last time the position was updated (ISO 8601 format)
+
+    Note: P&L calculations (unrealizedPnL, marketValue, costBasis) are not included in the API response. You can calculate these values using: P&L = (priceClose - priceAvg) × shares
+
+Response Example
+
+[
+  {
+    "accountId": "TZ12345678",
+    "symbol": "AAPL",
+    "tradedSymbol": "AAPL",
+    "rootSymbol": "AAPL",
+    "securityType": "stock",
+    "shares": 200,
+    "side": "Long",
+    "priceAvg": 175.25,
+    "priceOpen": 175.25,
+    "priceClose": 178.50,
+    "priceStrike": 0,
+    "putCall": "",
+    "dayOvernight": "Overnight",
+    "createdDate": "2024-11-27T14:30:00Z",
+    "updatedDate": "2024-12-11T15:45:00Z"
+  },
+  {
+    "accountId": "TZ12345678",
+    "symbol": "TSLA",
+    "tradedSymbol": "TSLA",
+    "rootSymbol": "TSLA",
+    "securityType": "stock",
+    "shares": -50,
+    "side": "Short",
+    "priceAvg": 251.00,
+    "priceOpen": 251.00,
+    "priceClose": 248.50,
+    "priceStrike": 0,
+    "putCall": "",
+    "dayOvernight": "Day",
+    "createdDate": "2024-12-11T10:15:00Z",
+    "updatedDate": "2024-12-11T15:45:00Z"
+  }
+]
+
+Understanding Position Data
+
+Long vs. Short Positions
+
+    Long (positive shares): You own shares expecting price to rise
+    Short (negative shares): You've borrowed shares expecting price to fall
+    The side field indicates "Long" or "Short"
+
+Day vs. Overnight Positions
+
+    Day: Positions opened today (subject to day trading rules if closed same day)
+    Overnight: Positions held from previous trading day
+    The dayOvernight field indicates which type
+
+Calculating P&L You can calculate unrealized P&L using the provided fields:
+
+    Unrealized P&L = (priceClose - priceAvg) × shares
+    For Shorts: Profit when priceClose < priceAvg
+    For Longs: Profit when priceClose > priceAvg
+    Market Value = priceClose × shares
+    Cost Basis = priceAvg × shares
+
+Cancel Order
+DELETE /v1/api/accounts/{accountId}/orders/{clientOrderId}
+
+Cancel a specific order by client order ID. Only orders with status "new" or "partially_filled" can be canceled.
+Client Order ID
+
+    clientOrderId: Your custom identifier for tracking orders throughout their lifecycle
+    This field is returned in all API responses and used for order cancellation
+    If you don't provide a clientOrderId when creating an order, TradeZero will auto-generate one for you
+    Always use the clientOrderId for order management operations like cancellation
+
+Request Example
+CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/orders/MY_ORDER_001' \
+-X DELETE \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+Cancel All Orders
+DELETE /v1/api/accounts/orders
+
+Cancel all open orders across all accounts. Useful for emergency situations or end-of-day cleanup.
+Request Example
+CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/orders' \
+-X DELETE \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+Best Practices
+Order Management
+
+    Use Client Order IDs - Always assign unique clientOrderId values when creating orders for easy tracking and cancellation
+    Verify Order Status - Always check order status after submission
+    Handle Partial Fills - Monitor filledQuantity vs quantity for incomplete executions
+    Cancel Before Close - Cancel open orders before market close if not desired overnight
+
+Position Monitoring
+
+    Regular Polling - Update positions every 1-5 seconds during active trading
+    Track Intraday Positions - Monitor intradayQuantity to avoid pattern day trader restrictions
+    Calculate Total Exposure - Sum all position values to understand total market exposure
+    Monitor Short Positions - Short positions have unlimited risk; monitor carefully
+
+Error Handling
+
+Common error scenarios to handle:
+
+    Insufficient Buying Power - Check account buying power before placing orders
+    Invalid Symbol - Verify symbol exists and is tradeable
+    Market Closed - Orders submitted outside market hours may be queued
+    Order Not Found - Order may already be filled or canceled
+    Concurrent Modifications - Handle race conditions when multiple systems access same orders
+
+Risk Management
+
+    Pre-Trade Validation - Check buying power, margin requirements, and position limits
+    Stop-Loss Orders - Use stop orders to limit downside risk
+    Position Limits - Implement maximum position size rules
+    Diversification - Monitor concentration risk in single symbols
+
+Performance Optimization
+
+    Batch Position Queries - Retrieve all positions at once rather than per-symbol
+    Cache Order Data - Cache order list and poll for updates rather than full refresh
+    Use WebSocket for Real-Time - Consider WebSocket API for real-time order and position updates
+    Rate Limiting - Respect API rate limits to avoid throttling
+

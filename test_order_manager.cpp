@@ -1,13 +1,24 @@
 // test_order_manager.cpp - Unit tests for order manager module
 // Compile: clang++ -std=c++11 -o test_order_manager test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp -lsqlite3
+//
+// NOTE: Order fill simulation (process_fills) was removed in favor of TradeZero WebSocket integration.
+// Tests that relied on simulated fills are now disabled. Order manager logic is tested via
+// integration tests with mock TradeZero server instead.
 
 #include "order_manager.h"
+#include "tradezero_client.h"
+#include "tradezero_websocket.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <mutex>
+#include <curl/curl.h>
 
 // ============================================================================
 // Test helpers
@@ -60,6 +71,46 @@ static const char* TEST_DATA_DIR = "test_data_om";
 // Setup test environment
 static Database g_test_db;
 static MarketData g_test_market;
+static TradeZeroClient g_test_tz_client;
+static TradeZeroWebSocket g_test_ws;
+static OrderManager g_test_om;  // Global OrderManager - avoids race with WebSocket callback
+static std::atomic<int> g_order_events_count{0};
+static std::mutex g_om_mutex;   // Protect OrderManager access
+
+// WebSocket callback that forwards order updates to the global OrderManager
+static void on_ws_order_update(const TZOrderUpdate& update) {
+    std::lock_guard<std::mutex> lock(g_om_mutex);
+    g_test_om.on_tradezero_order_update(update);
+    g_order_events_count.fetch_add(1);
+}
+
+// Helper to wait until pending orders reaches expected count (with mutex protection)
+static bool wait_for_pending_count(size_t expected_count, int timeout_ms = 5000) {
+    int waited = 0;
+    while (waited < timeout_ms) {
+        {
+            std::lock_guard<std::mutex> lock(g_om_mutex);
+            if (g_test_om.get_pending_orders().size() == expected_count) {
+                return true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        waited += 50;
+    }
+    return false;
+}
+
+
+// Stub for removed OrderManager::process_fills() method
+// Fill events now come from TradeZero WebSocket - the mock server simulates fills
+// This function waits for pending orders to be filled (order count drops to 0)
+// Returns true if fills completed, false if timeout
+static bool process_fills_stub(OrderManager*) {
+    // Wait for pending orders to be filled (removed from pending list)
+    // The mock server sends Accepted then Filled events
+    // Orders are removed from pending when status becomes Filled
+    return wait_for_pending_count(0u, 5000);
+}
 
 static void setup_test_data() {
     mkdir(TEST_DATA_DIR, 0755);
@@ -95,12 +146,70 @@ static void cleanup_test_data() {
     unlink(TEST_DB);
 }
 
+static bool g_ws_connected = false;
+
 static void init_test_env() {
     unlink(TEST_DB);
     g_test_db.init(TEST_DB);
     g_test_market.set_data_source(DataSourceMode::FILE);
     g_test_market.set_data_dir(TEST_DATA_DIR);
     (void)g_test_market.load_symbol("TEST");  // May fail if no test data, that's OK
+
+    // Configure TradeZero REST client to use mock server
+    g_test_tz_client.set_base_url("http://localhost:8080/v1/api");
+    g_test_tz_client.set_credentials("test_key", "test_secret", "test_account");
+
+    // Configure TradeZero WebSocket to use mock server (port 8081, no SSL)
+    // Connect once at start of tests
+    if (!g_ws_connected) {
+        g_test_ws.set_url("localhost", 8081, false);
+        g_test_ws.set_credentials("test_key", "test_secret", "test_account");
+        g_test_ws.set_order_callback(on_ws_order_update);
+
+        if (g_test_ws.connect(TZStream::PORTFOLIO)) {
+            g_ws_connected = true;
+            // Wait for connection to establish and authenticate (with timeout)
+            int timeout_ms = 5000;
+            int waited = 0;
+            while (!g_test_ws.is_connected() && waited < timeout_ms) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                waited += 50;
+            }
+        }
+    }
+}
+
+// Reset mock server state (clear all orders and events)
+static void reset_mock_server() {
+    // Send POST to reset endpoint to clear mock server state
+    CURL* curl = curl_easy_init();
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:8080/v1/api/reset");
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+        // Suppress output
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, +[](char*, size_t s, size_t n, void*) -> size_t { return s * n; });
+        curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+    }
+    // Give mock server time to process reset
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
+// Helper to reset global order manager for each test
+static void reset_order_manager() {
+    // Reset mock server state first (clears orders and pending events)
+    reset_mock_server();
+
+    // Reset event counter
+    g_order_events_count.store(0);
+
+    std::lock_guard<std::mutex> lock(g_om_mutex);
+    // Re-initialize the global order manager for clean test state
+    g_test_om = OrderManager();  // Reset to clean state
+    g_test_om.init(&g_test_db, &g_test_market);
+    g_test_om.set_tradezero_client(&g_test_tz_client);
 }
 
 // ============================================================================
@@ -109,13 +218,12 @@ static void init_test_env() {
 
 TEST(buy_order_creates_pending) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
-    int64_t id = om.buy("TEST", 100, 100.10f);
+    int64_t id = g_test_om.buy("TEST", 100, 100.10f);
     ASSERT_TRUE(id > 0);
 
-    const auto& pending = om.get_pending_orders();
+    const auto& pending = g_test_om.get_pending_orders();
     ASSERT_EQ(pending.size(), 1u);
     ASSERT_STREQ(pending[0].symbol, "TEST");
     ASSERT_EQ(pending[0].side, OrderSide::BUY);
@@ -126,80 +234,82 @@ TEST(buy_order_creates_pending) {
 
 TEST(buy_order_invalid_params) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
-    ASSERT_EQ(om.buy("", 100, 100.00f), -1);
-    ASSERT_EQ(om.buy(nullptr, 100, 100.00f), -1);
-    ASSERT_EQ(om.buy("TEST", 0, 100.00f), -1);
-    ASSERT_EQ(om.buy("TEST", -1, 100.00f), -1);
-    ASSERT_EQ(om.buy("TEST", 100, 0.0f), -1);
-    ASSERT_EQ(om.buy("TEST", 100, -1.0f), -1);
+    ASSERT_EQ(g_test_om.buy("", 100, 100.00f), -1);
+    ASSERT_EQ(g_test_om.buy(nullptr, 100, 100.00f), -1);
+    ASSERT_EQ(g_test_om.buy("TEST", 0, 100.00f), -1);
+    ASSERT_EQ(g_test_om.buy("TEST", -1, 100.00f), -1);
+    ASSERT_EQ(g_test_om.buy("TEST", 100, 0.0f), -1);
+    ASSERT_EQ(g_test_om.buy("TEST", 100, -1.0f), -1);
 }
 
 TEST(sell_without_position_fails) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // No position, so sell should fail
-    int64_t id = om.sell("TEST", 100, 100.00f);
+    int64_t id = g_test_om.sell("TEST", 100, 100.00f);
     ASSERT_EQ(id, -1);
 }
 
 TEST(cancel_order) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
-    int64_t id = om.buy("TEST", 100, 100.10f);
+    int64_t id = g_test_om.buy("TEST", 100, 100.10f);
     ASSERT_TRUE(id > 0);
-    ASSERT_EQ(om.get_pending_orders().size(), 1u);
+    ASSERT_EQ(g_test_om.get_pending_orders().size(), 1u);
 
-    ASSERT_TRUE(om.cancel_order(id));
-    ASSERT_EQ(om.get_pending_orders().size(), 0u);
+    // Cancel sends REST request, WebSocket confirms cancellation
+    ASSERT_TRUE(g_test_om.cancel_order(id));
+
+    // Wait for WebSocket to deliver cancellation event and order to be removed
+    // Use condition-based wait since async events from previous tests may arrive first
+    ASSERT_TRUE(wait_for_pending_count(0u, 10000));
 }
 
 TEST(cancel_nonexistent_order) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
-    ASSERT_FALSE(om.cancel_order(999));
+    ASSERT_FALSE(g_test_om.cancel_order(999));
 }
 
 TEST(cancel_all_orders) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
-    om.buy("TEST", 100, 100.10f);
-    om.buy("TEST", 200, 100.20f);
-    om.buy("TEST", 300, 100.30f);
-    ASSERT_EQ(om.get_pending_orders().size(), 3u);
+    g_test_om.buy("TEST", 100, 100.10f);
+    g_test_om.buy("TEST", 200, 100.20f);
+    g_test_om.buy("TEST", 300, 100.30f);
+    ASSERT_EQ(g_test_om.get_pending_orders().size(), 3u);
 
-    ASSERT_TRUE(om.cancel_all_orders());
-    ASSERT_EQ(om.get_pending_orders().size(), 0u);
+    // Cancel all sends REST request, WebSocket confirms each cancellation
+    ASSERT_TRUE(g_test_om.cancel_all_orders());
+
+    // Wait for WebSocket to deliver cancellation events and all orders to be removed
+    // Use condition-based wait since async events from previous tests may arrive first
+    ASSERT_TRUE(wait_for_pending_count(0u, 15000));
 }
 
 TEST(buy_fills_when_price_crosses_ask) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // Place buy order at ask price (100.05)
-    int64_t id = om.buy("TEST", 100, 100.05f);
+    int64_t id = g_test_om.buy("TEST", 100, 100.05f);
     ASSERT_TRUE(id > 0);
-    ASSERT_EQ(om.get_pending_orders().size(), 1u);
+    ASSERT_EQ(g_test_om.get_pending_orders().size(), 1u);
 
     // Process fills - should fill because price >= ask
-    om.process_fills();
+    process_fills_stub(&g_test_om);
 
     // Order should be filled and removed from pending
-    ASSERT_EQ(om.get_pending_orders().size(), 0u);
+    ASSERT_EQ(g_test_om.get_pending_orders().size(), 0u);
 
     // Position should be created
-    const auto& positions = om.get_open_positions();
+    const auto& positions = g_test_om.get_open_positions();
     ASSERT_EQ(positions.size(), 1u);
     ASSERT_STREQ(positions[0].symbol, "TEST");
     ASSERT_EQ(positions[0].quantity, 100);
@@ -207,131 +317,124 @@ TEST(buy_fills_when_price_crosses_ask) {
 
 TEST(buy_doesnt_fill_below_ask) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // Place buy order below ask price
-    int64_t id = om.buy("TEST", 100, 100.00f);  // Ask is 100.05
+    int64_t id = g_test_om.buy("TEST", 100, 100.00f);  // Ask is 100.05
     ASSERT_TRUE(id > 0);
 
     // Process fills - should NOT fill
-    om.process_fills();
+    process_fills_stub(&g_test_om);
 
     // Order should still be pending
-    ASSERT_EQ(om.get_pending_orders().size(), 1u);
-    ASSERT_EQ(om.get_open_positions().size(), 0u);
+    ASSERT_EQ(g_test_om.get_pending_orders().size(), 1u);
+    ASSERT_EQ(g_test_om.get_open_positions().size(), 0u);
 }
 
 TEST(sell_fills_when_price_crosses_bid) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // First buy to get a position
-    om.buy("TEST", 100, 100.10f);
-    om.process_fills();
-    ASSERT_EQ(om.get_open_positions().size(), 1u);
+    g_test_om.buy("TEST", 100, 100.10f);
+    process_fills_stub(&g_test_om);
+    ASSERT_EQ(g_test_om.get_open_positions().size(), 1u);
 
     // Now sell at or below bid (99.95)
-    int64_t id = om.sell("TEST", 50, 99.95f);
+    int64_t id = g_test_om.sell("TEST", 50, 99.95f);
     ASSERT_TRUE(id > 0);
 
-    om.process_fills();
+    process_fills_stub(&g_test_om);
 
     // Sell should fill
-    ASSERT_EQ(om.get_pending_orders().size(), 0u);
+    ASSERT_EQ(g_test_om.get_pending_orders().size(), 0u);
 
     // Position should be reduced
-    const auto& positions = om.get_open_positions();
+    const auto& positions = g_test_om.get_open_positions();
     ASSERT_EQ(positions.size(), 1u);
     ASSERT_EQ(positions[0].quantity, 50);
 
     // Closed position should be recorded
-    ASSERT_EQ(om.get_closed_positions().size(), 1u);
+    ASSERT_EQ(g_test_om.get_closed_positions().size(), 1u);
 }
 
 TEST(sell_entire_position) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // Buy to get position
-    om.buy("TEST", 100, 100.10f);
-    om.process_fills();
+    g_test_om.buy("TEST", 100, 100.10f);
+    process_fills_stub(&g_test_om);
 
     // Sell all
-    om.sell("TEST", 100, 99.95f);
-    om.process_fills();
+    g_test_om.sell("TEST", 100, 99.95f);
+    process_fills_stub(&g_test_om);
 
     // Position should be removed
-    ASSERT_EQ(om.get_open_positions().size(), 0u);
+    ASSERT_EQ(g_test_om.get_open_positions().size(), 0u);
 
     // Closed position should be recorded
-    ASSERT_EQ(om.get_closed_positions().size(), 1u);
+    ASSERT_EQ(g_test_om.get_closed_positions().size(), 1u);
 }
 
 TEST(calculate_sell_quantity) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // Buy 100 shares
-    om.buy("TEST", 100, 100.10f);
-    om.process_fills();
+    g_test_om.buy("TEST", 100, 100.10f);
+    process_fills_stub(&g_test_om);
 
-    ASSERT_EQ(om.calculate_sell_quantity("TEST", 25), 25);
-    ASSERT_EQ(om.calculate_sell_quantity("TEST", 50), 50);
-    ASSERT_EQ(om.calculate_sell_quantity("TEST", 75), 75);
-    ASSERT_EQ(om.calculate_sell_quantity("TEST", 100), 100);
+    ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 25), 25);
+    ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 50), 50);
+    ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 75), 75);
+    ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 100), 100);
 }
 
 TEST(calculate_sell_quantity_rounds_down) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // Buy 100 shares
-    om.buy("TEST", 100, 100.10f);
-    om.process_fills();
+    g_test_om.buy("TEST", 100, 100.10f);
+    process_fills_stub(&g_test_om);
 
     // 33% of 100 = 33
-    ASSERT_EQ(om.calculate_sell_quantity("TEST", 33), 33);
+    ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 33), 33);
 
     // 10% of 100 = 10
-    ASSERT_EQ(om.calculate_sell_quantity("TEST", 10), 10);
+    ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 10), 10);
 }
 
 TEST(calculate_sell_quantity_minimum_one) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // Buy 3 shares
-    om.buy("TEST", 3, 100.10f);
-    om.process_fills();
+    g_test_om.buy("TEST", 3, 100.10f);
+    process_fills_stub(&g_test_om);
 
     // 25% of 3 = 0.75, should round to at least 1
-    ASSERT_EQ(om.calculate_sell_quantity("TEST", 25), 1);
+    ASSERT_EQ(g_test_om.calculate_sell_quantity("TEST", 25), 1);
 }
 
 TEST(position_avg_price_calculation) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // Buy 100 at 100.00
-    om.buy("TEST", 100, 100.10f);
-    om.process_fills();
+    g_test_om.buy("TEST", 100, 100.10f);
+    process_fills_stub(&g_test_om);
 
-    Position* pos = om.find_position("TEST");
+    Position* pos = g_test_om.find_position("TEST");
     ASSERT_TRUE(pos != nullptr);
     ASSERT_FLOAT_EQ(pos->avg_price, 100.10f, 0.01f);
 
     // Buy another 100 at 101.00
-    om.buy("TEST", 100, 101.10f);
-    om.process_fills();
+    g_test_om.buy("TEST", 100, 101.10f);
+    process_fills_stub(&g_test_om);
 
-    pos = om.find_position("TEST");
+    pos = g_test_om.find_position("TEST");
     ASSERT_TRUE(pos != nullptr);
     ASSERT_EQ(pos->quantity, 200);
     // Avg should be (100*100.10 + 100*101.10) / 200 = 100.60
@@ -340,18 +443,17 @@ TEST(position_avg_price_calculation) {
 
 TEST(closed_position_pnl) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
     // Buy 100 at 100.10
-    om.buy("TEST", 100, 100.10f);
-    om.process_fills();
+    g_test_om.buy("TEST", 100, 100.10f);
+    process_fills_stub(&g_test_om);
 
     // Sell 100 at 99.95 (assuming fill at sell price for test)
-    om.sell("TEST", 100, 99.95f);
-    om.process_fills();
+    g_test_om.sell("TEST", 100, 99.95f);
+    process_fills_stub(&g_test_om);
 
-    const auto& closed = om.get_closed_positions();
+    const auto& closed = g_test_om.get_closed_positions();
     ASSERT_EQ(closed.size(), 1u);
     ASSERT_EQ(closed[0].quantity, 100);
     ASSERT_FLOAT_EQ(closed[0].entry_price, 100.10f, 0.01f);
@@ -362,49 +464,55 @@ TEST(closed_position_pnl) {
 
 TEST(find_position) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
-    ASSERT_TRUE(om.find_position("TEST") == nullptr);
+    ASSERT_TRUE(g_test_om.find_position("TEST") == nullptr);
 
-    om.buy("TEST", 100, 100.10f);
-    om.process_fills();
+    g_test_om.buy("TEST", 100, 100.10f);
+    process_fills_stub(&g_test_om);
 
-    Position* pos = om.find_position("TEST");
+    Position* pos = g_test_om.find_position("TEST");
     ASSERT_TRUE(pos != nullptr);
     ASSERT_STREQ(pos->symbol, "TEST");
 }
 
 TEST(find_order) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
-    int64_t id = om.buy("TEST", 100, 99.00f);  // Won't fill (below ask)
+    int64_t id = g_test_om.buy("TEST", 100, 99.00f);  // Won't fill (below ask)
 
-    Order* order = om.find_order(id);
+    Order* order = g_test_om.find_order(id);
     ASSERT_TRUE(order != nullptr);
     ASSERT_EQ(order->id, id);
 
-    Order* nonexistent = om.find_order(999);
+    Order* nonexistent = g_test_om.find_order(999);
     ASSERT_TRUE(nonexistent == nullptr);
 }
 
 TEST(order_callback) {
     init_test_env();
-    OrderManager om;
-    om.init(&g_test_db, &g_test_market);
+    reset_order_manager();
 
-    int callback_count = 0;
-    om.set_order_callback([&callback_count](const Order&) {
-        callback_count++;
+    // Verify WebSocket is still connected
+    if (!g_test_ws.is_connected()) {
+        std::printf("WARNING: WebSocket disconnected before order_callback test\n");
+    }
+
+    std::atomic<int> callback_count{0};
+    g_test_om.set_order_callback([&callback_count](const Order&) {
+        callback_count.fetch_add(1);
     });
 
-    om.buy("TEST", 100, 100.10f);
-    ASSERT_EQ(callback_count, 1);
+    g_test_om.buy("TEST", 100, 100.10f);
+    ASSERT_EQ(callback_count.load(), 1);  // Called once on buy()
 
-    om.process_fills();
-    ASSERT_EQ(callback_count, 2);  // Called again on fill
+    process_fills_stub(&g_test_om);
+    // Callback called 3 times total:
+    // 1. Order placed (from buy())
+    // 2. Order accepted (from WebSocket - broker acknowledged)
+    // 3. Order filled (from WebSocket - execution complete)
+    ASSERT_EQ(callback_count.load(), 3);
 }
 
 TEST(persistence) {
@@ -423,7 +531,7 @@ TEST(persistence) {
         om.init(&db, &market);
 
         om.buy("TEST", 100, 100.10f);
-        om.process_fills();
+        process_fills_stub(&om);
 
         om.save_to_database();
         db.close();

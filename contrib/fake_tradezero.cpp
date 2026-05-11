@@ -17,6 +17,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <ctime>
+#include <csignal>
 #include <string>
 #include <vector>
 #include <map>
@@ -28,8 +29,19 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <poll.h>
+#ifdef __APPLE__
+#include <CommonCrypto/CommonDigest.h>
+#else
+#include <openssl/sha.h>
+#endif
 
 static std::atomic<bool> g_running{true};
+
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    g_running.store(false);
+}
 
 // ============================================================================
 // Mock Data
@@ -58,6 +70,13 @@ static std::vector<MockOrder> g_orders;
 static std::vector<MockPosition> g_positions;
 static int g_next_order_id = 1000;
 
+// Event queue for WebSocket notifications
+struct OrderEvent {
+    MockOrder order;
+};
+static std::mutex g_events_mutex;
+static std::vector<OrderEvent> g_pending_events;
+
 // ============================================================================
 // Utilities
 // ============================================================================
@@ -76,6 +95,174 @@ static void log_info(const char* fmt, ...) {
 
     std::printf("[%s][INFO] %s\n", time_str, buf);
     std::fflush(stdout);
+}
+
+// Base64 encoding table
+static const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static std::string base64_encode(const unsigned char* data, size_t len) {
+    std::string result;
+    result.reserve((len + 2) / 3 * 4);
+    for (size_t i = 0; i < len; i += 3) {
+        unsigned int val = data[i] << 16;
+        if (i + 1 < len) val |= data[i + 1] << 8;
+        if (i + 2 < len) val |= data[i + 2];
+        result += base64_chars[(val >> 18) & 0x3F];
+        result += base64_chars[(val >> 12) & 0x3F];
+        result += (i + 1 < len) ? base64_chars[(val >> 6) & 0x3F] : '=';
+        result += (i + 2 < len) ? base64_chars[val & 0x3F] : '=';
+    }
+    return result;
+}
+
+// Compute SHA1 hash
+static void sha1(const unsigned char* data, size_t len, unsigned char* hash) {
+#ifdef __APPLE__
+    CC_SHA1(data, static_cast<CC_LONG>(len), hash);
+#else
+    SHA1(data, len, hash);
+#endif
+}
+
+// Compute WebSocket accept key
+static std::string compute_ws_accept(const std::string& ws_key) {
+    const char* magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    std::string combined = ws_key + magic;
+    unsigned char hash[20];
+    sha1(reinterpret_cast<const unsigned char*>(combined.c_str()), combined.size(), hash);
+    return base64_encode(hash, 20);
+}
+
+// Send WebSocket frame (text)
+static void ws_send_text(int sock, const std::string& msg) {
+    size_t len = msg.size();
+    std::vector<uint8_t> frame;
+
+    // Opcode: 0x81 = final frame, text
+    frame.push_back(0x81);
+
+    // Length
+    if (len <= 125) {
+        frame.push_back(static_cast<uint8_t>(len));
+    } else if (len <= 65535) {
+        frame.push_back(126);
+        frame.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));
+        frame.push_back(static_cast<uint8_t>(len & 0xFF));
+    } else {
+        frame.push_back(127);
+        for (int i = 7; i >= 0; i--) {
+            frame.push_back(static_cast<uint8_t>((len >> (8 * i)) & 0xFF));
+        }
+    }
+
+    // Payload
+    frame.insert(frame.end(), msg.begin(), msg.end());
+
+    send(sock, frame.data(), frame.size(), 0);
+}
+
+// Read WebSocket frame (simple implementation)
+static std::string ws_recv_frame(int sock, int timeout_ms = 5000) {
+    // Set socket timeout
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    uint8_t header[2];
+    ssize_t n = recv(sock, header, 2, 0);
+    if (n <= 0) return "";
+
+    // bool fin = (header[0] & 0x80) != 0;
+    // uint8_t opcode = header[0] & 0x0F;
+    bool masked = (header[1] & 0x80) != 0;
+    uint64_t payload_len = header[1] & 0x7F;
+
+    if (payload_len == 126) {
+        uint8_t ext[2];
+        recv(sock, ext, 2, 0);
+        payload_len = (static_cast<uint64_t>(ext[0]) << 8) | ext[1];
+    } else if (payload_len == 127) {
+        uint8_t ext[8];
+        recv(sock, ext, 8, 0);
+        payload_len = 0;
+        for (int i = 0; i < 8; i++) {
+            payload_len = (payload_len << 8) | ext[i];
+        }
+    }
+
+    uint8_t mask[4] = {0, 0, 0, 0};
+    if (masked) {
+        recv(sock, mask, 4, 0);
+    }
+
+    std::string payload(payload_len, '\0');
+    size_t received = 0;
+    while (received < payload_len) {
+        n = recv(sock, &payload[received], payload_len - received, 0);
+        if (n <= 0) break;
+        received += static_cast<size_t>(n);
+    }
+
+    // Unmask if needed
+    if (masked) {
+        for (size_t i = 0; i < payload.size(); i++) {
+            payload[i] ^= mask[i % 4];
+        }
+    }
+
+    return payload;
+}
+
+// Perform WebSocket handshake
+static bool ws_handshake(int sock, std::string& path) {
+    char buffer[4096];
+    std::string request;
+
+    // Set socket timeout for handshake
+    struct timeval tv;
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // Read HTTP request
+    while (true) {
+        ssize_t n = recv(sock, buffer, sizeof(buffer) - 1, 0);
+        if (n <= 0) return false;
+        buffer[n] = '\0';
+        request += buffer;
+        if (request.find("\r\n\r\n") != std::string::npos) break;
+    }
+
+    // Parse request line for path
+    size_t method_end = request.find(' ');
+    size_t path_end = request.find(' ', method_end + 1);
+    if (method_end == std::string::npos || path_end == std::string::npos) return false;
+    path = request.substr(method_end + 1, path_end - method_end - 1);
+
+    // Find Sec-WebSocket-Key
+    std::string ws_key;
+    size_t key_pos = request.find("Sec-WebSocket-Key:");
+    if (key_pos == std::string::npos) return false;
+    size_t key_start = key_pos + 18;
+    while (key_start < request.size() && request[key_start] == ' ') key_start++;
+    size_t key_end = request.find("\r\n", key_start);
+    ws_key = request.substr(key_start, key_end - key_start);
+
+    // Compute accept key
+    std::string accept = compute_ws_accept(ws_key);
+
+    // Send response
+    char response[512];
+    std::snprintf(response, sizeof(response),
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: %s\r\n"
+        "\r\n", accept.c_str());
+
+    send(sock, response, strlen(response), 0);
+    return true;
 }
 
 static int create_server_socket(int port) {
@@ -104,11 +291,24 @@ static int create_server_socket(int port) {
     return sock;
 }
 
-static std::string read_http_request(int sock) {
+static std::string read_http_request(int sock, int timeout_ms = 5000) {
     char buffer[4096];
     std::string request;
 
+    // Set socket receive timeout
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
     while (true) {
+        // Use poll to wait for data with timeout
+        struct pollfd pfd;
+        pfd.fd = sock;
+        pfd.events = POLLIN;
+        int poll_result = poll(&pfd, 1, timeout_ms);
+        if (poll_result <= 0) break;  // Timeout or error
+
         ssize_t n = recv(sock, buffer, sizeof(buffer) - 1, 0);
         if (n <= 0) break;
 
@@ -237,19 +437,27 @@ static void handle_http_client(int client_sock) {
         }
 
         // Create order
-        std::lock_guard<std::mutex> lock(g_data_mutex);
         MockOrder order;
         char order_id[64];
-        std::snprintf(order_id, sizeof(order_id), "ORD%d", g_next_order_id++);
-        order.client_order_id = order_id;
-        order.symbol = symbol;
-        order.side = side;
-        order.order_status = "Accepted";
-        order.order_quantity = quantity;
-        order.executed = 0;
-        order.limit_price = limit_price;
-        order.price_avg = 0.0f;
-        g_orders.push_back(order);
+        {
+            std::lock_guard<std::mutex> lock(g_data_mutex);
+            std::snprintf(order_id, sizeof(order_id), "ORD%d", g_next_order_id++);
+            order.client_order_id = order_id;
+            order.symbol = symbol;
+            order.side = side;
+            order.order_status = "Accepted";
+            order.order_quantity = quantity;
+            order.executed = 0;
+            order.limit_price = limit_price;
+            order.price_avg = 0.0f;
+            g_orders.push_back(order);
+        }
+
+        // Queue event for WebSocket notification
+        {
+            std::lock_guard<std::mutex> lock(g_events_mutex);
+            g_pending_events.push_back({order});
+        }
 
         char json[256];
         std::snprintf(json, sizeof(json),
@@ -258,21 +466,59 @@ static void handle_http_client(int client_sock) {
     }
     else if (method == "DELETE" && path.find("/v1/api/accounts/") == 0 && path.find("/orders/") != std::string::npos) {
         // DELETE order
-        std::lock_guard<std::mutex> lock(g_data_mutex);
-        // Extract order ID from path
-        size_t last_slash = path.rfind('/');
-        if (last_slash != std::string::npos) {
-            std::string order_id = path.substr(last_slash + 1);
+        MockOrder canceled_order;
+        bool found = false;
 
-            // Find and cancel order
-            for (auto& ord : g_orders) {
-                if (ord.client_order_id == order_id) {
-                    ord.order_status = "Canceled";
-                    break;
+        {
+            std::lock_guard<std::mutex> lock(g_data_mutex);
+            // Extract order ID from path
+            size_t last_slash = path.rfind('/');
+            if (last_slash != std::string::npos) {
+                std::string order_id = path.substr(last_slash + 1);
+
+                // Find and cancel order
+                for (auto& ord : g_orders) {
+                    if (ord.client_order_id == order_id) {
+                        ord.order_status = "Canceled";
+                        canceled_order = ord;
+                        found = true;
+                        break;
+                    }
                 }
             }
         }
 
+        // Queue event for WebSocket notification
+        if (found) {
+            std::lock_guard<std::mutex> lock(g_events_mutex);
+            g_pending_events.push_back({canceled_order});
+        }
+
+        send_http_response(client_sock, 200, "OK", "{\"status\":\"success\"}");
+    }
+    else if (method == "DELETE" && path.find("/accounts/orders") != std::string::npos && path.find("/orders/") == std::string::npos) {
+        // DELETE all orders (cancel all)
+        std::vector<MockOrder> canceled_orders;
+
+        {
+            std::lock_guard<std::mutex> lock(g_data_mutex);
+            for (auto& ord : g_orders) {
+                if (ord.order_status != "Canceled" && ord.order_status != "Filled") {
+                    ord.order_status = "Canceled";
+                    canceled_orders.push_back(ord);
+                }
+            }
+        }
+
+        // Queue events for WebSocket notification
+        {
+            std::lock_guard<std::mutex> lock(g_events_mutex);
+            for (const auto& ord : canceled_orders) {
+                g_pending_events.push_back({ord});
+            }
+        }
+
+        log_info("HTTP: Cancel all orders - %zu orders canceled", canceled_orders.size());
         send_http_response(client_sock, 200, "OK", "{\"status\":\"success\"}");
     }
     else {
@@ -333,103 +579,95 @@ static void http_server(int port) {
 }
 
 // ============================================================================
-// WebSocket Handler (Simplified - just sends JSON over TCP)
+// WebSocket Handler (with proper WebSocket framing)
 // ============================================================================
 
 static void handle_ws_client(int client_sock, const std::string& stream_path) {
     log_info("WebSocket client connected to %s", stream_path.c_str());
 
-    char buffer[4096];
-    std::string line_buffer;
     bool authenticated = false;
     bool subscribed = false;
 
-    // Send initial system message
-    const char* pending_auth = "{\"@system\":true,\"status\":\"PENDING_AUTH\"}\n";
-    send(client_sock, pending_auth, strlen(pending_auth), 0);
+    // Send initial system message using WebSocket frame
+    ws_send_text(client_sock, "{\"@system\":true,\"status\":\"PENDING_AUTH\"}");
 
     while (g_running.load()) {
         struct pollfd pfd = {client_sock, POLLIN, 0};
-        int ret = poll(&pfd, 1, 1000);
+        int ret = poll(&pfd, 1, 100);  // 100ms poll timeout
 
         if (ret < 0) break;
 
         if (ret > 0) {
-            ssize_t n = recv(client_sock, buffer, sizeof(buffer) - 1, 0);
-            if (n <= 0) break;
+            // Read WebSocket frame
+            std::string msg = ws_recv_frame(client_sock, 1000);
+            if (msg.empty()) {
+                // Connection closed or error - exit loop to avoid busy-wait
+                // (poll returns immediately on closed socket, ws_recv_frame returns empty)
+                break;
+            }
 
-            buffer[n] = '\0';
-            line_buffer += buffer;
+            log_info("WS %s: Received '%s'", stream_path.c_str(), msg.c_str());
 
-            // Process complete lines (JSON messages)
-            size_t pos;
-            while ((pos = line_buffer.find('\n')) != std::string::npos) {
-                std::string line = line_buffer.substr(0, pos);
-                line_buffer = line_buffer.substr(pos + 1);
+            // Check for auth message
+            if (!authenticated && msg.find("\"key\":") != std::string::npos) {
+                authenticated = true;
+                ws_send_text(client_sock, "{\"@system\":true,\"status\":\"CONNECTED\"}");
+                log_info("WS %s: Authenticated", stream_path.c_str());
+            }
+            // Check for subscribe message
+            else if (authenticated && !subscribed && msg.find("\"account") != std::string::npos) {
+                subscribed = true;
+                log_info("WS %s: Subscribed", stream_path.c_str());
 
-                if (line.empty()) continue;
-
-                log_info("WS %s: Received '%s'", stream_path.c_str(), line.c_str());
-
-                // Check for auth message
-                if (!authenticated && line.find("\"key\":") != std::string::npos) {
-                    authenticated = true;
-                    const char* connected = "{\"@system\":true,\"status\":\"CONNECTED\"}\n";
-                    send(client_sock, connected, strlen(connected), 0);
-                    log_info("WS %s: Authenticated", stream_path.c_str());
-                }
-                // Check for subscribe message
-                else if (authenticated && !subscribed && line.find("\"account") != std::string::npos) {
-                    subscribed = true;
-                    log_info("WS %s: Subscribed", stream_path.c_str());
-
-                    // Send initial snapshot for P&L stream
-                    if (stream_path == "/stream/pnl") {
-                        const char* snapshot =
-                            "{\"action\":\"init\",\"accountValue\":50000.00,"
-                            "\"availableCash\":25000.00,\"dayPnl\":250.50,"
-                            "\"dayUnrealized\":150.25,\"dayRealized\":100.25,"
-                            "\"totalUnrealized\":300.00,\"allowedLeverage\":4.0,"
-                            "\"positions\":[{\"positionId\":\"pos1\",\"symbol\":\"AAPL\","
-                            "\"pnlCalc\":{\"unrealizedPnL\":200.0,\"dayUnrealizedPnL\":50.0,"
-                            "\"exposure\":15000.0},\"realizedPnl\":100.0,\"dayRealizedPnl\":50.0}]}\n";
-                        send(client_sock, snapshot, strlen(snapshot), 0);
-                    }
+                // Send initial snapshot for P&L stream
+                if (stream_path == "/stream/pnl") {
+                    ws_send_text(client_sock,
+                        "{\"action\":\"init\",\"accountValue\":50000.00,"
+                        "\"availableCash\":25000.00,\"dayPnl\":250.50,"
+                        "\"dayUnrealized\":150.25,\"dayRealized\":100.25,"
+                        "\"totalUnrealized\":300.00,\"allowedLeverage\":4.0,"
+                        "\"positions\":[{\"positionId\":\"pos1\",\"symbol\":\"AAPL\","
+                        "\"pnlCalc\":{\"unrealizedPnL\":200.0,\"dayUnrealizedPnL\":50.0,"
+                        "\"exposure\":15000.0},\"realizedPnl\":100.0,\"dayRealizedPnl\":50.0}]}");
                 }
             }
         }
 
-        // Send periodic updates if subscribed
-        if (subscribed) {
-            if (stream_path == "/stream/pnl") {
-                // Send aggregate update
-                const char* update =
+        // Process pending events for portfolio stream (immediate notifications)
+        if (subscribed && stream_path == "/stream/portfolio") {
+            std::vector<OrderEvent> events_to_send;
+            {
+                std::lock_guard<std::mutex> lock(g_events_mutex);
+                events_to_send = std::move(g_pending_events);
+                g_pending_events.clear();
+            }
+
+            for (const auto& event : events_to_send) {
+                char update[512];
+                std::snprintf(update, sizeof(update),
+                    "{\"subscription\":\"Order\",\"symbol\":\"%s\","
+                    "\"clientOrderId\":\"%s\",\"side\":\"%s\","
+                    "\"orderStatus\":\"%s\",\"orderQuantity\":%d,"
+                    "\"executed\":%d,\"limitPrice\":%.2f}",
+                    event.order.symbol.c_str(), event.order.client_order_id.c_str(),
+                    event.order.side.c_str(), event.order.order_status.c_str(),
+                    event.order.order_quantity, event.order.executed, event.order.limit_price);
+                ws_send_text(client_sock, update);
+                log_info("WS portfolio: Sent order event for %s (%s)",
+                    event.order.client_order_id.c_str(), event.order.order_status.c_str());
+            }
+        }
+
+        // Send periodic P&L updates (less frequent)
+        if (subscribed && stream_path == "/stream/pnl") {
+            static int pnl_counter = 0;
+            if (++pnl_counter % 50 == 0) {  // Every 5 seconds (50 * 100ms poll)
+                ws_send_text(client_sock,
                     "{\"target\":\"aggCalcs\",\"accountValue\":50100.00,"
                     "\"exposure\":15000.0,\"dayUnrealized\":160.00,"
                     "\"dayPnl\":260.00,\"totalUnrealized\":310.00,"
-                    "\"equityRatio\":0.85}\n";
-                send(client_sock, update, strlen(update), 0);
+                    "\"equityRatio\":0.85}");
             }
-            else if (stream_path == "/stream/portfolio") {
-                // Send order update
-                std::lock_guard<std::mutex> lock(g_data_mutex);
-                if (!g_orders.empty()) {
-                    const auto& ord = g_orders[0];
-                    char update[512];
-                    std::snprintf(update, sizeof(update),
-                        "{\"subscription\":\"Order\",\"symbol\":\"%s\","
-                        "\"clientOrderId\":\"%s\",\"side\":\"%s\","
-                        "\"orderStatus\":\"%s\",\"orderQuantity\":%d,"
-                        "\"executed\":%d,\"limitPrice\":%.2f}\n",
-                        ord.symbol.c_str(), ord.client_order_id.c_str(),
-                        ord.side.c_str(), ord.order_status.c_str(),
-                        ord.order_quantity, ord.executed, ord.limit_price);
-                    send(client_sock, update, strlen(update), 0);
-                }
-            }
-
-            // Slow down updates
-            std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     }
 
@@ -457,23 +695,16 @@ static void ws_server(int port) {
 
         int client_sock = accept(server_sock, nullptr, nullptr);
         if (client_sock >= 0) {
-            // Read first line to determine stream path
-            char buffer[1024];
-            ssize_t n = recv(client_sock, buffer, sizeof(buffer) - 1, 0);
-            if (n > 0) {
-                buffer[n] = '\0';
-                std::string first_line(buffer);
-
-                // Detect stream from first message or default to pnl
-                std::string stream_path = "/stream/pnl";
-                if (first_line.find("portfolio") != std::string::npos) {
-                    stream_path = "/stream/portfolio";
-                }
-
-                std::thread(handle_ws_client, client_sock, stream_path).detach();
-            } else {
+            // Perform WebSocket handshake
+            std::string stream_path;
+            if (!ws_handshake(client_sock, stream_path)) {
+                log_info("WebSocket handshake failed");
                 close(client_sock);
+                continue;
             }
+
+            log_info("WebSocket handshake successful for path: %s", stream_path.c_str());
+            std::thread(handle_ws_client, client_sock, stream_path).detach();
         }
     }
 
@@ -505,6 +736,10 @@ int main(int argc, char* argv[]) {
             return 0;
         }
     }
+
+    // Setup signal handlers for graceful shutdown
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
 
     log_info("Starting fake TradeZero server");
     log_info("HTTP REST API: http://localhost:%d", http_port);

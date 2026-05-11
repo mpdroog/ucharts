@@ -28,6 +28,7 @@ TradeZeroClient::TradeZeroClient() : m_timeout(30) {
     m_api_secret_key[0] = '\0';
     m_account_id[0] = '\0';
     m_error[0] = '\0';
+    m_base_url[0] = '\0';
 
     // Initialize curl globally
     static bool curl_initialized = false;
@@ -52,13 +53,27 @@ void TradeZeroClient::set_credentials(const char* api_key_id, const char* api_se
     m_account_id[sizeof(m_account_id) - 1] = '\0';
 }
 
+void TradeZeroClient::set_base_url(const char* url) {
+    if (url != nullptr) {
+        std::strncpy(m_base_url, url, sizeof(m_base_url) - 1);
+        m_base_url[sizeof(m_base_url) - 1] = '\0';
+    } else {
+        m_base_url[0] = '\0';
+    }
+}
+
 bool TradeZeroClient::is_configured() const {
     return m_api_key_id[0] != '\0' && m_api_secret_key[0] != '\0' && m_account_id[0] != '\0';
 }
 
 std::string TradeZeroClient::build_url(const char* endpoint) const {
-    // Base URL: https://webapi.tradezero.com/v1/api/
-    std::string url = "https://webapi.tradezero.com/v1/api";
+    // Use custom base URL if set (for testing), otherwise production URL
+    std::string url;
+    if (m_base_url[0] != '\0') {
+        url = m_base_url;
+    } else {
+        url = "https://webapi.tradezero.com/v1/api";
+    }
     if (endpoint != nullptr && endpoint[0] != '\0') {
         if (endpoint[0] != '/') {
             url += '/';

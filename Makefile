@@ -120,35 +120,8 @@ check-deps:
 	fi
 
 # Test targets
-test: test_logic test_database test_market_data test_order_manager test_integration test_async_io test_tradezero_config test_tradezero_client test_tradezero_websocket
-	@echo "Running logic tests..."
-	./test_logic
-	@echo ""
-	@echo "Running database tests..."
-	./test_database
-	@echo ""
-	@echo "Running market data tests..."
-	./test_market_data
-	@echo ""
-	@echo "Running order manager tests..."
-	./test_order_manager
-	@echo ""
-	@echo "Running integration tests..."
-	./test_integration
-	@echo ""
-	@echo "Running async I/O tests..."
-	./test_async_io
-	@echo ""
-	@echo "Running TradeZero config tests..."
-	./test_tradezero_config
-	@echo ""
-	@echo "Running TradeZero client tests..."
-	./test_tradezero_client
-	@echo ""
-	@echo "Running TradeZero WebSocket tests..."
-	./test_tradezero_websocket
-	@echo ""
-	@echo "All tests passed!"
+test: test_logic test_database test_market_data test_order_manager test_integration test_async_io test_tradezero_config test_tradezero_client test_tradezero_websocket contrib/fake_iqfeed contrib/fake_tradezero
+	@./run_integration_tests.sh
 
 test_logic: test_logic.cpp
 	$(CXX) $(TEST_CXXFLAGS) -o $@ $<
@@ -159,11 +132,11 @@ test_database: test_database.cpp database.cpp
 test_market_data: test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
 	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_market_data.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
 
-test_order_manager: test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+test_order_manager: test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_order_manager.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp $(TEST_LDFLAGS)
 
-test_integration: test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
+test_integration: test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_integration.cpp order_manager.cpp database.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp $(TEST_LDFLAGS)
 
 test_async_io: test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp
 	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_async_io.cpp market_data.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp $(TEST_LDFLAGS)
@@ -179,6 +152,13 @@ test_tradezero_client: test_tradezero_client.cpp tradezero_client.cpp http_clien
 
 test_tradezero_websocket: test_tradezero_websocket.cpp tradezero_websocket.cpp
 	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_tradezero_websocket.cpp tradezero_websocket.cpp $(TEST_LDFLAGS)
+
+# Mock servers for integration testing (Go)
+contrib/fake_iqfeed: contrib/fake_iqfeed.go
+	cd contrib && go build -o fake_iqfeed fake_iqfeed.go
+
+contrib/fake_tradezero: contrib/fake_tradezero.go
+	cd contrib && go build -o fake_tradezero fake_tradezero.go
 
 # ThreadSanitizer targets - build with TSan to detect race conditions
 tsan: tsan_threading
@@ -204,6 +184,8 @@ thread-check-strict:
 
 clean:
 	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_tradezero_config test_tradezero_client test_tradezero_websocket test_ucharts.db test_order_manager.db test_integration.db
+	rm -f contrib/fake_iqfeed contrib/fake_tradezero contrib/test_with_mocks
+	rm -f .fake_iqfeed.pid .fake_tradezero.pid contrib/.fake_*.pid
 
 clean-all: clean
 	rm -rf $(IMGUI_DIR)

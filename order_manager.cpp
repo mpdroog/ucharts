@@ -6,6 +6,9 @@
 #include <cstring>
 #include <ctime>
 #include <algorithm>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 // Global order manager instance
 static OrderManager g_order_manager;
@@ -46,11 +49,25 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
             return -1;
         }
 
-        // Extract clientOrderId from response
-        // For now, generate a simple client order ID (TradeZero will provide the real one)
+        // Extract clientOrderId from response JSON
         char client_order_id[64];
-        std::snprintf(client_order_id, sizeof(client_order_id), "BUY_%s_%lld",
-                     symbol, static_cast<long long>(get_current_timestamp()));
+        client_order_id[0] = '\0';
+        try {
+            auto j = json::parse(resp.body);
+            if (j.contains("clientOrderId") && j["clientOrderId"].is_string()) {
+                std::string cid = j["clientOrderId"].get<std::string>();
+                safe_strcpy(client_order_id, cid.c_str(), sizeof(client_order_id));
+            }
+        } catch (const json::exception& e) {
+            LOG_E("orders", "Failed to parse place_order response: %s", e.what());
+        }
+
+        // Fallback: generate our own ID if server didn't provide one
+        if (client_order_id[0] == '\0') {
+            std::snprintf(client_order_id, sizeof(client_order_id), "BUY_%s_%lld",
+                         symbol, static_cast<long long>(get_current_timestamp()));
+            LOG_W("orders", "Server didn't return clientOrderId, generated: %s", client_order_id);
+        }
 
         // Create local pending order for immediate UI feedback
         Order order;
@@ -108,10 +125,25 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
             return -1;
         }
 
-        // Generate client order ID (TradeZero will provide the real one)
+        // Extract clientOrderId from response JSON
         char client_order_id[64];
-        std::snprintf(client_order_id, sizeof(client_order_id), "SELL_%s_%lld",
-                     symbol, static_cast<long long>(get_current_timestamp()));
+        client_order_id[0] = '\0';
+        try {
+            auto j = json::parse(resp.body);
+            if (j.contains("clientOrderId") && j["clientOrderId"].is_string()) {
+                std::string cid = j["clientOrderId"].get<std::string>();
+                safe_strcpy(client_order_id, cid.c_str(), sizeof(client_order_id));
+            }
+        } catch (const json::exception& e) {
+            LOG_E("orders", "Failed to parse place_order response: %s", e.what());
+        }
+
+        // Fallback: generate our own ID if server didn't provide one
+        if (client_order_id[0] == '\0') {
+            std::snprintf(client_order_id, sizeof(client_order_id), "SELL_%s_%lld",
+                         symbol, static_cast<long long>(get_current_timestamp()));
+            LOG_W("orders", "Server didn't return clientOrderId, generated: %s", client_order_id);
+        }
 
         // Create local pending order for immediate UI feedback
         Order order;
@@ -456,6 +488,9 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
               update.order_status, order->filled, order->quantity);
     }
 
+    // Copy order for callback (before potential erase that would invalidate pointer)
+    Order order_copy = *order;
+
     // Handle filled orders
     if (order->status == OrderStatus::FILLED) {
         int fill_qty = order->quantity;
@@ -484,9 +519,9 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
         }
     }
 
-    // Notify UI
-    if (m_order_callback && order != nullptr) {
-        m_order_callback(*order);
+    // Notify UI (use copy since order pointer may be invalid after erase)
+    if (m_order_callback) {
+        m_order_callback(order_copy);
     }
 }
 

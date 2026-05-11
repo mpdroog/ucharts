@@ -1,0 +1,315 @@
+Account Information
+
+The Account Information APIs provide comprehensive access to your TradeZero account data, including account details, cash values, buying power, and margin requirements. Use these endpoints to build account dashboards, monitor balances, and manage your trading operations programmatically.
+Overview
+
+The Account Information APIs enable you to:
+
+    List all trading accounts associated with your credentials
+    Retrieve detailed account information including balances and buying power
+    Access real-time cash values and margin calculations
+    Monitor account status and restrictions
+
+List User Accounts
+GET /v1/api/accounts
+
+Retrieve a list of all trading accounts associated with your API credentials. This is typically the first endpoint you'll call to identify which accounts you have access to.
+Use Cases
+
+    Account Discovery - Identify all accounts you can trade with
+    Multi-Account Management - Build interfaces for users with multiple trading accounts
+    Account Selection - Present users with account options before executing trades
+    Access Verification - Confirm API credentials have proper account access
+
+Request Example
+CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts' \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+Response Structure
+
+The endpoint returns an array of account objects, each containing:
+Field	Type	Description
+accountId	string	Unique identifier for the trading account
+accountName	string	Display name of the account
+accountType	string	Account type (e.g., "Cash", "Margin", "PDT")
+status	string	Account status (e.g., "Active", "Restricted")
+Response Example
+
+[
+  {
+    "accountId": "TZ12345678",
+    "accountName": "Primary Trading Account",
+    "accountType": "Margin",
+    "status": "Active"
+  },
+  {
+    "accountId": "TZ87654321",
+    "accountName": "Secondary Account",
+    "accountType": "Cash",
+    "status": "Active"
+  }
+]
+
+Retrieve Account Details
+GET /v1/api/account/{accountId}
+
+Retrieve comprehensive information about a specific trading account, including balances, buying power, positions summary, and account restrictions.
+Use Cases
+
+    Account Dashboard - Display complete account overview to users
+    Pre-Trade Validation - Check buying power before placing orders
+    Margin Monitoring - Track margin usage and requirements
+    Risk Management - Monitor account equity and margin levels
+    Compliance Checks - Verify account status before trading
+
+Request Example
+CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/account/TZ12345678' \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+Replace TZ12345678 with your actual account ID obtained from the List User Accounts endpoint.
+Response Structure
+
+The endpoint returns detailed account information:
+Field	Type	Description
+accountId	string	Account identifier
+accountType	string	Type of account (Cash, Margin, PDT)
+buyingPower	number	Available buying power for new positions
+cashBalance	number	Current cash balance
+equity	number	Total account equity (cash + positions value)
+marginUsed	number	Current margin being utilized
+marginAvailable	number	Additional margin available
+dayTradingBuyingPower	number	Buying power available for day trading
+maintenanceMargin	number	Minimum margin required for current positions
+positionMarketValue	number	Total market value of all positions
+unrealizedPnL	number	Unrealized profit/loss on open positions
+realizedPnL	number	Realized profit/loss for the day
+dayTradesRemaining	number	Number of day trades remaining (for PDT accounts)
+accountRestrictions	array	Any restrictions on the account
+Response Example
+
+{
+  "accountId": "TZ12345678",
+  "accountType": "Margin",
+  "buyingPower": 250000.00,
+  "cashBalance": 50000.00,
+  "equity": 75000.00,
+  "marginUsed": 15000.00,
+  "marginAvailable": 235000.00,
+  "dayTradingBuyingPower": 100000.00,
+  "maintenanceMargin": 10000.00,
+  "positionMarketValue": 25000.00,
+  "unrealizedPnL": 1500.00,
+  "realizedPnL": 500.00,
+  "dayTradesRemaining": 3,
+  "accountRestrictions": []
+}
+
+Key Metrics Explained
+
+Buying Power
+
+    The maximum amount you can use to purchase securities
+    For margin accounts, this is typically 2-4x your cash balance depending on account type
+    Reduced by open positions and margin requirements
+
+Equity
+
+    Total value of your account (cash + positions)
+    Formula: Cash Balance + Position Market Value
+    Used to calculate margin requirements
+
+Margin Used vs. Available
+
+    Margin Used: Amount of borrowed funds currently in use
+    Margin Available: Additional buying power you can leverage
+    Monitor these values to avoid margin calls
+
+Day Trading Buying Power
+
+    Special buying power for intraday trades (Pattern Day Trader accounts)
+    Typically 4x the previous day's closing balance
+    Resets daily
+
+Retrieve Account Cash Values
+GET /v1/api/accounts/{accountId}/pnl
+
+Get detailed cash-related information including profit/loss calculations, cash available for withdrawal, and settled/unsettled funds breakdown.
+Use Cases
+
+    P&L Reporting - Track trading performance and profitability
+    Cash Management - Monitor available cash for withdrawals
+    Settlement Tracking - Understand cash settlement timelines
+    Performance Analytics - Calculate returns and trading metrics
+    Tax Reporting - Access realized gains/losses data
+
+Request Example
+CURL Example
+
+curl 'https://webapi.tradezero.com/v1/api/accounts/TZ12345678/pnl' \
+-H 'Accept: application/json' \
+-H 'TZ-API-KEY-ID: {YOUR_CLIENT_ID}' \
+-H 'TZ-API-SECRET-KEY: {YOUR_CLIENT_SECRET}'
+
+Response Structure
+Field	Type	Description
+cashAvailableForWithdrawal	number	Settled cash available to withdraw
+cashBalance	number	Total cash in account
+settledCash	number	Fully settled cash (T+2)
+unsettledCash	number	Cash pending settlement
+totalRealizedPnL	number	Total realized P&L for the trading day
+totalUnrealizedPnL	number	Total unrealized P&L on open positions
+openPositionPnL	number	P&L from currently open positions
+closedPositionPnL	number	P&L from positions closed today
+commissions	number	Total commissions paid today
+fees	number	Total fees paid today
+Response Example
+
+{
+  "accountId": "TZ12345678",
+  "cashAvailableForWithdrawal": 48000.00,
+  "cashBalance": 50000.00,
+  "settledCash": 48000.00,
+  "unsettledCash": 2000.00,
+  "totalRealizedPnL": 1200.00,
+  "totalUnrealizedPnL": 850.00,
+  "openPositionPnL": 850.00,
+  "closedPositionPnL": 1200.00,
+  "commissions": 45.50,
+  "fees": 12.30
+}
+
+Understanding Cash Values
+
+Cash Available for Withdrawal
+
+    Only includes fully settled cash (typically T+2 settlement)
+    Does not include unsettled proceeds from recent sales
+    Does not include margin or buying power
+
+Settled vs. Unsettled Cash
+
+    Settled Cash: Available immediately for withdrawal
+    Unsettled Cash: Proceeds from sales awaiting settlement (typically 2 business days)
+
+Realized vs. Unrealized P&L
+
+    Realized P&L: Profit/loss from closed positions
+    Unrealized P&L: Current profit/loss on open positions
+    Realized P&L affects your cash balance; unrealized does not
+
+Best Practices
+Polling Frequency
+
+    Account balances: Poll every 5-10 seconds during active trading
+    P&L data: Update every 1-2 seconds for real-time monitoring
+    Account list: Cache and refresh only when needed (hourly or on user action)
+
+Error Handling
+
+Always check for these common scenarios:
+
+    Invalid Account ID: Verify account exists and you have access
+    Insufficient Permissions: Ensure API key has account read permissions
+    Rate Limits: Implement exponential backoff for rate limit errors
+
+Data Synchronization
+
+// Example: Check buying power before placing order
+async function canPlaceOrder(accountId, orderValue) {
+  const account = await getAccountDetails(accountId);
+
+  if (account.buyingPower < orderValue) {
+    throw new Error('Insufficient buying power');
+  }
+
+  return true;
+}
+
+Security Considerations
+
+    Never expose account IDs in client-side code
+    Cache account data server-side to minimize API calls
+    Implement proper authentication for account data access
+    Log all account data access for audit purposes
+
+Common Workflows
+Building an Account Dashboard
+
+    List Accounts - GET /v1/api/accounts
+    Get Account Details - GET /v1/api/account/{accountId}
+    Get Cash Values - GET /v1/api/accounts/{accountId}/pnl
+    Display combined information in your UI
+
+Pre-Trade Validation
+
+async function validateOrderPlacement(accountId, orderValue) {
+  // Get account details
+  const account = await fetch(`/v1/api/account/${accountId}`);
+
+  // Check buying power
+  if (account.buyingPower < orderValue) {
+    return { valid: false, reason: 'Insufficient buying power' };
+  }
+
+  // Check account restrictions
+  if (account.accountRestrictions.includes('TRADING_SUSPENDED')) {
+    return { valid: false, reason: 'Account trading suspended' };
+  }
+
+  // Check day trade limits (for PDT accounts)
+  if (account.dayTradesRemaining <= 0) {
+    return { valid: false, reason: 'Day trade limit reached' };
+  }
+
+  return { valid: true };
+}
+
+Monitoring Account Health
+
+async function checkAccountHealth(accountId) {
+  const account = await fetch(`/v1/api/account/${accountId}`);
+  const pnl = await fetch(`/v1/api/accounts/${accountId}/pnl`);
+
+  const alerts = [];
+
+  // Check margin usage
+  const marginUsagePercent = (account.marginUsed / account.equity) * 100;
+  if (marginUsagePercent > 80) {
+    alerts.push('High margin usage - risk of margin call');
+  }
+
+  // Check unrealized losses
+  const unrealizedLossPercent = (pnl.totalUnrealizedPnL / account.equity) * 100;
+  if (unrealizedLossPercent < -10) {
+    alerts.push('Significant unrealized losses');
+  }
+
+  // Check day trade limit
+  if (account.dayTradesRemaining <= 1) {
+    alerts.push('Running low on day trades');
+  }
+
+  return alerts;
+}
+
+Additional Resources
+
+    Authentication Guide - Learn how to authenticate your API requests
+    Trading APIs - Place and manage orders
+    Positions API - View detailed position information
+    API Reference - Complete API documentation
+
+tip
+
+Store the account ID after retrieving it from the List User Accounts endpoint. You'll need to include it in most API requests for trading and account management.
+warning
+
+Always verify buying power and account status before placing orders to avoid order rejections and potential account restrictions.

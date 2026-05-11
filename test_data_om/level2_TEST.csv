@@ -1,0 +1,3 @@
+timestamp,symbol,side,exchange,price,size
+09:30:00.000,TEST,BID,NYSE,99.95,1000
+09:30:00.000,TEST,ASK,NYSE,100.05,1000

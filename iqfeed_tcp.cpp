@@ -171,7 +171,7 @@ void IQFeedLookup::disconnect() EXCLUDES(m_mutex) {
 }
 
 bool IQFeedLookup::is_connected() const {
-    return m_running;
+    return m_socket >= 0 && m_running;
 }
 
 bool IQFeedLookup::ensure_connected() {

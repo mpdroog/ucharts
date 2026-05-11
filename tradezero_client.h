@@ -26,6 +26,7 @@ public:
 
     // Configuration
     void set_credentials(const char* api_key_id, const char* api_secret_key, const char* account_id);
+    void set_base_url(const char* url);  // Override API base URL (for testing with mock server)
     bool is_configured() const;
 
     // Initial data sync (before WebSocket subscription)
@@ -50,6 +51,7 @@ private:
     char m_api_secret_key[128];
     char m_account_id[32];
     char m_error[256];
+    char m_base_url[256];  // Custom base URL (empty = production)
     int m_timeout;  // Request timeout in seconds
 
     // Build URL for API endpoint

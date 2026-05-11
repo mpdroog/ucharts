@@ -1,0 +1,405 @@
+WebSocket API
+Beta
+
+The WebSocket API is currently in beta. Features and endpoints are subject to change.
+Overview
+
+The TradeZero WebSocket API provides real-time streaming updates for account data. The API follows the standard RFC 6455 WebSocket protocol, with all messages exchanged in JSON format.
+
+Base URL: wss://webapi.tradezero.com/stream
+Connection & Authentication
+Step 1: Connect to the WebSocket
+
+Connect to the WebSocket URL:
+
+wss://webapi.tradezero.com/stream/{endpoint}
+
+Upon successful connection, you'll receive a system message indicating that authentication is required:
+
+{
+  "@system": true,
+  "ts": 1770236373127,
+  "status": "PENDING_AUTH",
+  "message": "Send authenticate message"
+}
+
+Step 2: Authenticate
+
+Send your API credentials as a JSON message:
+
+{
+  "key": "YOUR_TZ-API-KEY-ID",
+  "secret": "YOUR_TZ-API-SECRET-KEY"
+}
+
+Authentication Responses
+
+Success:
+
+{
+  "@system": true,
+  "ts": 1770237123968,
+  "status": "CONNECTED"
+}
+
+Failure:
+
+{
+  "@system": true,
+  "ts": 1770236412039,
+  "status": "FAILED_AUTH",
+  "message": "Authentication parameters not properly provided"
+}
+
+Available Endpoints
+Profit & Loss (PnL) Stream
+
+Endpoint: wss://webapi.tradezero.com/stream/pnl
+
+Real-time streaming of account profit and loss updates with position-level details.
+
+See the PnL Stream documentation for detailed information.
+Portfolio Stream
+
+Endpoint: wss://webapi.tradezero.com/stream/portfolio
+
+Real-time streaming of order status changes and position updates driven by order activity.
+
+See the Portfolio Stream documentation for detailed information.
+System Messages
+
+Messages with "@system": true are system-level notifications about connection status and authentication. Always check for these messages to handle authentication and connection errors properly.
+Disconnecting
+
+To stop receiving updates, simply disconnect from the WebSocket. There is currently no unsubscribe message; closing the connection will terminate all subscriptions.
+
+Profit & Loss Stream
+Beta
+
+The WebSocket API is currently in beta. Features and endpoints are subject to change.
+Overview
+
+The PnL Stream provides real-time streaming of account profit and loss updates with position-level details. It updates based on price changes and order fills. This stream is designed to give you up-to-the-second insights into your account's performance, including both aggregate account values and individual position metrics.
+
+Endpoint: wss://webapi.tradezero.com/stream/pnl
+Usage
+Step 1: Connect and Authenticate
+
+First, connect to the PnL endpoint and authenticate as described in the Introduction page.
+Step 2: Subscribe to an Account
+
+After authentication, subscribe to PnL updates for a specific account by sending:
+
+{
+  "account": "YOUR_ACCOUNT_ID"
+}
+
+Subscription Responses
+
+Success - Initial Snapshot:
+
+You'll receive a complete snapshot of the account's current state:
+
+{
+  "ts": 1770232416261,
+  "action": "init",
+  "target": "pnlReturn",
+  "pnlReturn": {
+    "accountValue": 9883.69,
+    "availableCash": 9755.18,
+    "optionCashUsed": 0.0,
+    "usedLeverage": 1.87,
+    "allowedLeverage": 2.0,
+    "sharesTraded": 0.0,
+    "exposure": 18447.89,
+    "dayUnrealized": -116.31,
+    "dayRealized": 0.0,
+    "dayPnl": -116.31,
+    "totalUnrealized": -1068.22,
+    "equityRatio": 0.535762704720142653,
+    "positions": [
+      {
+        "positionId": "7260105185048870000",
+        "symbol": "AAPL",
+        "pnlCalc": {
+          "unrealizedPnL": 60.08,
+          "dayUnrealizedPnL": 23.44,
+          "pctPnLMove": 5.77,
+          "dayPctPnLMove": 2.17,
+          "exposure": 1101.36
+        },
+        "realizedPnl": 0.0,
+        "dayRealizedPnl": 0.0
+      }
+    ]
+  }
+}
+
+Error - Invalid Account:
+
+{
+  "ts": 1770237416195,
+  "action": "error",
+  "message": "account not found"
+}
+
+Real-Time Updates
+
+After receiving the initial snapshot, you'll receive two types of update messages:
+1. Aggregate Account Updates
+
+Updates to account-level aggregate values:
+
+{
+  "ts": 1770232416799,
+  "action": "update",
+  "target": "aggCalcs",
+  "aggCalcs": {
+    "accountValue": 9883.82,
+    "exposure": 18448.02,
+    "dayUnrealized": -116.18,
+    "dayPnl": -116.18,
+    "totalUnrealized": -1068.09,
+    "equityRatio": 0.535765976119629001
+  }
+}
+
+2. Position-Level Updates
+
+Updates to individual position values:
+
+{
+  "ts": 1770232416799,
+  "action": "update",
+  "target": "position",
+  "position": {
+    "positionId": "7260109165951251001",
+    "symbol": "MSFT",
+    "pnlCalc": {
+      "unrealizedPnL": -103.14,
+      "dayUnrealizedPnL": 11.36,
+      "pctPnLMove": -11.01,
+      "dayPctPnLMove": 1.38,
+      "exposure": 833.78
+    }
+  }
+}
+
+Multiple Account Subscriptions
+
+You can subscribe to multiple accounts by sending additional account messages:
+
+{
+  "account": "ANOTHER_ACCOUNT_ID"
+}
+
+Each account will send its own initial snapshot followed by real-time updates.
+Field Definitions
+Account-Level Fields
+Field	Type	Description
+accountValue	number	Total account value
+availableCash	number	Cash available for trading
+optionCashUsed	number	Cash allocated to options positions
+usedLeverage	number	Current leverage being used
+allowedLeverage	number	Maximum allowed leverage
+sharesTraded	number	Number of shares traded
+exposure	number	Total market exposure
+dayUnrealized	number	Unrealized profit/loss for the day
+dayRealized	number	Realized profit/loss for the day
+dayPnl	number	Total profit/loss for the day
+totalUnrealized	number	Total unrealized profit/loss
+equityRatio	number	Equity to account value ratio
+Position-Level Fields
+Field	Type	Description
+positionId	string	Unique identifier for the position
+symbol	string	Stock symbol
+unrealizedPnL	number	Total unrealized profit/loss
+dayUnrealizedPnL	number	Unrealized profit/loss for the day
+pctPnLMove	number	Percentage change in total P&L
+dayPctPnLMove	number	Percentage change in day P&L
+exposure	number	Position's market exposure
+realizedPnl	number	Total realized profit/loss
+dayRealizedPnl	number	Realized profit/loss for the day
+
+Portfolio Stream
+Beta
+
+The WebSocket API is currently in beta. Features and endpoints are subject to change.
+Overview
+
+The Portfolio Stream provides real-time updates for active orders and position changes driven by order activity (fills, cancellations, etc.) for one or more accounts.
+
+Endpoint: wss://webapi.tradezero.com/stream/portfolio
+Price-driven position updates
+
+Position updates caused by price changes (mark-to-market) are delivered by the PnL Stream, not this endpoint. The Portfolio Stream only reflects position changes resulting from order activity.
+Recommended Usage Pattern
+
+The Portfolio Stream delivers incremental changes — it does not send a full snapshot of your current orders or positions when you first connect. The recommended pattern is:
+
+    Fetch current state via REST — call the relevant REST endpoints to get your current orders and positions before subscribing:
+        Retrieve Orders — returns all active orders for an account
+        Retrieve Positions / PnL — returns current positions and P&L
+    Subscribe to the Portfolio Stream — then connect and subscribe to receive real-time changes as they occur.
+
+This approach avoids polling the REST endpoints repeatedly and ensures your local state stays in sync with the minimum number of requests.
+tip
+
+Establish your WebSocket connection and start buffering incoming messages before you fetch the REST snapshot. This prevents any updates that arrive between the REST call completing and the WebSocket connecting from being missed.
+Usage
+Step 1: Connect and Authenticate
+
+Connect to the Portfolio endpoint and authenticate as described in the Introduction page.
+
+Upon successful authentication you will receive a meta confirmation message:
+
+{
+  "ts": 1771861718189,
+  "accountId": "YOUR_ACCOUNT",
+  "action": "meta",
+  "requestConfirmed": true
+}
+
+Step 2: Subscribe to an Account
+
+After authentication, subscribe to portfolio updates by sending an account ID and the list of subscriptions you want:
+
+{
+  "accountId": "YOUR_ACCOUNT_ID",
+  "subscriptions": ["Order", "Position"]
+}
+
+You can subscribe to either or both streams:
+Value	Description
+"Order"	Real-time updates to active orders (accepted, filled, canceled, etc.)
+"Position"	Real-time changes to positions driven by order activity
+Real-Time Updates
+
+All update messages share the same top-level envelope:
+Field	Type	Description
+ts	number	Unix timestamp in milliseconds
+accountId	string	The account the update belongs to
+action	string	Always "update" for data messages
+subscription	string	Either "Order" or "Position"
+1. Order Updates
+
+Received whenever an order changes state (e.g. accepted, partially filled, filled, canceled).
+
+{
+  "ts": 1771864795549,
+  "accountId": "JARLETUAT",
+  "action": "update",
+  "subscription": "Order",
+  "order": {
+    "accountId": "JARLETUAT",
+    "canceledQuantity": 0.0,
+    "clientOrderId": "0223043705907.34",
+    "executed": 1.0,
+    "lastPrice": 398.41,
+    "lastQuantity": 1.0,
+    "lastUpdated": "2026-02-23T16:39:55.2586072+00:00",
+    "leavesQuantity": 0.0,
+    "limitPrice": 398.41,
+    "maxDisplayQuantity": 0.0,
+    "openClose": "Open",
+    "orderQuantity": 1.0,
+    "orderStatus": "Filled",
+    "orderType": "Limit",
+    "pegDifference": 0.0,
+    "pegOffsetType": "Price",
+    "priceAvg": 398.41,
+    "priceStop": 0.0,
+    "route": "SIM",
+    "securityType": "Stock",
+    "side": "Buy",
+    "startTime": "2026-02-23T16:37:05.9092992+00:00",
+    "strikePrice": 0.0,
+    "symbol": "TSLA",
+    "text": "CTDL_SIM",
+    "timeInForce": "Day",
+    "tradedSymbol": "TSLA"
+  }
+}
+
+Order Field Definitions
+Field	Type	Description
+accountId	string	Account the order belongs to
+canceledQuantity	number	Quantity canceled
+clientOrderId	string	Client-assigned order identifier
+executed	number	Total quantity executed so far
+lastPrice	number	Price of the most recent fill
+lastQuantity	number	Quantity of the most recent fill
+lastUpdated	string	ISO 8601 timestamp of the last update
+leavesQuantity	number	Remaining open quantity
+limitPrice	number	Limit price of the order
+maxDisplayQuantity	number	Maximum displayed quantity (reserve/iceberg orders)
+openClose	string	"Open" or "Close"
+orderQuantity	number	Total ordered quantity
+orderStatus	string	Current order status (e.g. "Filled", "Canceled", "Accepted")
+orderType	string	Order type (e.g. "Limit", "Market")
+pegDifference	number	Peg offset value
+pegOffsetType	string	Peg offset type (e.g. "Price")
+priceAvg	number	Volume-weighted average fill price
+priceStop	number	Stop price (if applicable)
+route	string	Routing destination (e.g. "SIM")
+securityType	string	Security type (e.g. "Stock")
+side	string	"Buy" or "Sell"
+startTime	string	ISO 8601 timestamp when the order was placed
+strikePrice	number	Strike price for options (0.0 for equities)
+symbol	string	Ticker symbol
+text	string	Free-text order notes or routing tag
+timeInForce	string	Time in force (e.g. "Day", "GTC")
+tradedSymbol	string	Symbol actually traded (may differ for options)
+2. Position Updates
+
+Received whenever a position is created or modified as a result of an order fill.
+
+{
+  "ts": 1771864795549,
+  "accountId": "JARLETUAT",
+  "action": "update",
+  "subscription": "Position",
+  "position": {
+    "id": "7260223163955259000",
+    "accountId": "JARLETUAT",
+    "createdDate": "2026-02-23T16:39:55.2588684+00:00",
+    "dayOvernight": "Day",
+    "priceAvg": 398.41,
+    "priceClose": 0.0,
+    "priceOpen": 398.41,
+    "priceStrike": 0.0,
+    "putCall": "None",
+    "securityType": "Stock",
+    "shares": 1.0,
+    "side": "Long",
+    "symbol": "TSLA",
+    "updatedDate": "2026-02-23T16:39:55.2588696+00:00"
+  }
+}
+
+Position Field Definitions
+Field	Type	Description
+id	string	Unique position identifier
+accountId	string	Account the position belongs to
+createdDate	string	ISO 8601 timestamp when the position was first opened
+dayOvernight	string	"Day" or "Overnight"
+priceAvg	number	Average cost basis of the position
+priceClose	number	Previous close price (0.0 if intraday position)
+priceOpen	number	Price at which the position was opened
+priceStrike	number	Strike price for options (0.0 for equities)
+putCall	string	"Put", "Call", or "None" for equities
+securityType	string	Security type (e.g. "Stock")
+shares	number	Current position size (negative for short positions)
+side	string	"Long" or "Short"
+symbol	string	Ticker symbol
+updatedDate	string	ISO 8601 timestamp of the most recent update
+Multiple Account Subscriptions
+
+You can subscribe to multiple accounts by sending additional subscription messages:
+
+{
+  "accountId": "ANOTHER_ACCOUNT_ID",
+  "subscriptions": ["Order", "Position"]
+}
+
+Each account subscription is independent and will deliver its own stream of updates.
