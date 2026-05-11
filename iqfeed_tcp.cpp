@@ -127,8 +127,11 @@ IQFeedLookup::~IQFeedLookup() {
 }
 
 bool IQFeedLookup::connect(const char* host, int port) {
+    // If worker is already running, don't restart - just return success
+    // This fixes the race condition where multiple concurrent load_symbol calls
+    // would each restart the worker, dropping pending requests from the queue
     if (m_running) {
-        disconnect();
+        return true;
     }
 
     safe_strcpy(m_host, host, sizeof(m_host));
@@ -174,21 +177,48 @@ bool IQFeedLookup::ensure_connected() {
         return true;
     }
 
-    LOG_D("iqfeed", "Connecting to lookup server %s:%d", m_host, m_port);
-    m_socket = connect_tcp(m_host, m_port, m_error, sizeof(m_error));
-    if (m_socket < 0) {
-        LOG_E("iqfeed", "Lookup connection failed: %s", m_error);
-        return false;
+    // Retry forever with increasing backoff until connected or shutdown requested
+    while (m_running) {
+        LOG_D("iqfeed", "Connecting to lookup server %s:%d", m_host, m_port);
+        m_socket = connect_tcp(m_host, m_port, m_error, sizeof(m_error));
+
+        if (m_socket >= 0) {
+            // Connection succeeded - try to set protocol
+            if (set_protocol()) {
+                // Success! Reset retry delay for next time
+                m_retry_delay_ms = RETRY_DELAY_INITIAL_MS;
+                LOG_I("iqfeed", "Connected to lookup server");
+                return true;
+            }
+            // Protocol setup failed
+            close(m_socket);
+            m_socket = -1;
+        }
+
+        // Connection failed - log and wait before retrying
+        int delay = m_retry_delay_ms.load();
+        LOG_E("iqfeed", "Lookup connection failed: %s (retrying in %d ms)", m_error, delay);
+
+        // Sleep in small increments to allow clean shutdown
+        int slept = 0;
+        while (slept < delay && m_running) {
+            safe_sleep_ms(100);
+            slept += 100;
+        }
+
+        if (!m_running) {
+            return false;  // Shutdown requested
+        }
+
+        // Increase backoff for next failure (5x, capped at max)
+        int new_delay = delay * RETRY_BACKOFF_MULTIPLIER;
+        if (new_delay > RETRY_DELAY_MAX_MS) {
+            new_delay = RETRY_DELAY_MAX_MS;
+        }
+        m_retry_delay_ms = new_delay;
     }
 
-    if (!set_protocol()) {
-        close(m_socket);
-        m_socket = -1;
-        return false;
-    }
-
-    LOG_I("iqfeed", "Connected to lookup server");
-    return true;
+    return false;  // Shutdown requested
 }
 
 const char* IQFeedLookup::last_error() const {

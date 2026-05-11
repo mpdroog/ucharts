@@ -175,6 +175,12 @@ private:
     std::vector<Request> m_requests GUARDED_BY(m_mutex);
     LookupCallback m_callback GUARDED_BY(m_mutex);
 
+    // Retry backoff (starts at 1 second, increases 5x on each failure, resets on success)
+    std::atomic<int> m_retry_delay_ms{1000};
+    static constexpr int RETRY_DELAY_INITIAL_MS = 1000;
+    static constexpr int RETRY_DELAY_MAX_MS = 60000;  // Cap at 1 minute
+    static constexpr int RETRY_BACKOFF_MULTIPLIER = 5;
+
     bool send_command(const char* cmd);
     bool read_until_endmsg(std::string& response, int expected_lines = 0);
     bool parse_historical_response(const std::string& response, std::vector<Candle>& candles);
