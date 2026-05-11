@@ -388,15 +388,16 @@ void TradeZeroWebSocket::worker_thread() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    // Cleanup
+    // Clear active client BEFORE destroying context
+    // This prevents callbacks from accessing 'this' during destruction
+    if (g_active_ws_client == this) {
+        g_active_ws_client = nullptr;
+    }
+
+    // Now safe to destroy context - callbacks will see g_active_ws_client == nullptr
     if (m_lws_context) {
         lws_context_destroy(m_lws_context);
         m_lws_context = nullptr;
-    }
-
-    // Clear active client
-    if (g_active_ws_client == this) {
-        g_active_ws_client = nullptr;
     }
 }
 
