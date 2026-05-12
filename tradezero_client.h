@@ -30,18 +30,15 @@ public:
     bool is_configured() const;
 
     // Initial data sync (before WebSocket subscription)
-    TZResponse get_positions();
-    TZResponse get_orders();
+    // Returns parsed data directly; empty vector on failure (errors logged internally)
+    std::vector<Position> get_positions();
+    std::vector<Order> get_orders();
 
     // Order operations (no WebSocket equivalent)
     TZResponse place_order(const char* symbol, int quantity, const char* side,
                           const char* order_type, float limit_price, float stop_price);
     TZResponse cancel_order(const char* client_order_id);
     TZResponse cancel_all_orders();
-
-    // Parse JSON responses
-    bool parse_positions(const std::string& json, std::vector<Position>& positions);
-    bool parse_orders(const std::string& json, std::vector<Order>& orders);
 
     // Get last error
     const char* last_error() const;

@@ -68,8 +68,8 @@ func logError(format string, args ...interface{}) {
 func handlePositions(w http.ResponseWriter, r *http.Request) {
 	logInfo("REST: GET %s", r.URL.Path)
 	w.Header().Set("Content-Type", "application/json")
-	// API returns array directly, not wrapped in object
-	if _, err := w.Write([]byte(`[]`)); err != nil {
+	// API returns {"positions":[...]} wrapper
+	if _, err := w.Write([]byte(`{"positions":[]}`)); err != nil {
 		logError("REST: Failed to write positions response: %v", err)
 	}
 }
@@ -79,8 +79,11 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 	ordersMu.RLock()
 	defer ordersMu.RUnlock()
 
-	// API returns array directly, not wrapped in object
-	data, err := json.Marshal(orders)
+	// API returns {"orders":[...]} wrapper
+	wrapper := map[string]interface{}{
+		"orders": orders,
+	}
+	data, err := json.Marshal(wrapper)
 	if err != nil {
 		logError("REST: Failed to encode orders response: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

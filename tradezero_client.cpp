@@ -193,16 +193,172 @@ TZResponse TradeZeroClient::make_request(const char* method, const char* endpoin
     return response;
 }
 
-TZResponse TradeZeroClient::get_positions() {
+std::vector<Position> TradeZeroClient::get_positions() {
+    std::vector<Position> positions;
+
     char endpoint[128];
     std::snprintf(endpoint, sizeof(endpoint), "/accounts/%s/positions", m_account_id);
-    return make_request("GET", endpoint, nullptr);
+
+    TZResponse resp = make_request("GET", endpoint, nullptr);
+    if (!resp.success) {
+        LOG_W("tradezero", "Failed to fetch positions: HTTP %d", resp.status_code);
+        return positions;
+    }
+
+    try {
+        auto j = json::parse(resp.body);
+
+        // API returns {"positions":[...]} not raw array
+        if (j.is_object() && j.contains("positions") && j["positions"].is_array()) {
+            j = j["positions"];
+        } else if (!j.is_array()) {
+            LOG_E("tradezero", "Positions response not array: %.200s", resp.body.c_str());
+            return positions;
+        }
+
+        for (const auto& pos_json : j) {
+            Position position;
+            position.symbol[0] = '\0';
+            position.quantity = 0;
+            position.avg_price = 0.0f;
+            position.current_price = 0.0f;
+
+            if (pos_json.contains("symbol") && pos_json["symbol"].is_string()) {
+                std::string symbol = pos_json["symbol"].get<std::string>();
+                std::strncpy(position.symbol, symbol.c_str(), sizeof(position.symbol) - 1);
+                position.symbol[sizeof(position.symbol) - 1] = '\0';
+            }
+
+            if (pos_json.contains("shares")) {
+                if (pos_json["shares"].is_number_integer()) {
+                    position.quantity = pos_json["shares"].get<int>();
+                } else if (pos_json["shares"].is_number_float()) {
+                    position.quantity = static_cast<int>(pos_json["shares"].get<float>());
+                }
+            }
+
+            if (pos_json.contains("priceAvg")) {
+                position.avg_price = pos_json["priceAvg"].get<float>();
+            }
+
+            if (pos_json.contains("priceClose")) {
+                position.current_price = pos_json["priceClose"].get<float>();
+            }
+
+            if (position.symbol[0] != '\0') {
+                positions.push_back(position);
+            }
+        }
+
+        LOG_I("tradezero", "Fetched %zu positions", positions.size());
+
+    } catch (const json::exception& e) {
+        LOG_E("tradezero", "Positions JSON parse failed: %s (body: %.200s)", e.what(), resp.body.c_str());
+    }
+
+    return positions;
 }
 
-TZResponse TradeZeroClient::get_orders() {
+std::vector<Order> TradeZeroClient::get_orders() {
+    std::vector<Order> orders;
+
     char endpoint[128];
     std::snprintf(endpoint, sizeof(endpoint), "/accounts/%s/orders", m_account_id);
-    return make_request("GET", endpoint, nullptr);
+
+    TZResponse resp = make_request("GET", endpoint, nullptr);
+    if (!resp.success) {
+        LOG_W("tradezero", "Failed to fetch orders: HTTP %d", resp.status_code);
+        return orders;
+    }
+
+    try {
+        auto j = json::parse(resp.body);
+
+        // API returns {"orders":[...]} not raw array
+        if (j.is_object() && j.contains("orders") && j["orders"].is_array()) {
+            j = j["orders"];
+        } else if (!j.is_array()) {
+            LOG_E("tradezero", "Orders response not array: %.200s", resp.body.c_str());
+            return orders;
+        }
+
+        for (const auto& order_json : j) {
+            Order order;
+            order.id = 0;
+            order.symbol[0] = '\0';
+            order.quantity = 0;
+            order.price = 0.0f;
+            order.side = OrderSide::BUY;
+            order.status = OrderStatus::PENDING;
+            order.client_order_id[0] = '\0';
+            order.filled = 0;
+
+            if (order_json.contains("symbol") && order_json["symbol"].is_string()) {
+                std::string symbol = order_json["symbol"].get<std::string>();
+                std::strncpy(order.symbol, symbol.c_str(), sizeof(order.symbol) - 1);
+                order.symbol[sizeof(order.symbol) - 1] = '\0';
+            }
+
+            if (order_json.contains("clientOrderId") && order_json["clientOrderId"].is_string()) {
+                std::string cid = order_json["clientOrderId"].get<std::string>();
+                std::strncpy(order.client_order_id, cid.c_str(), sizeof(order.client_order_id) - 1);
+                order.client_order_id[sizeof(order.client_order_id) - 1] = '\0';
+            }
+
+            if (order_json.contains("orderQuantity")) {
+                if (order_json["orderQuantity"].is_number_integer()) {
+                    order.quantity = order_json["orderQuantity"].get<int>();
+                } else if (order_json["orderQuantity"].is_number_float()) {
+                    order.quantity = static_cast<int>(order_json["orderQuantity"].get<float>());
+                }
+            }
+
+            if (order_json.contains("limitPrice")) {
+                order.price = order_json["limitPrice"].get<float>();
+            }
+
+            if (order_json.contains("executed")) {
+                if (order_json["executed"].is_number_integer()) {
+                    order.filled = order_json["executed"].get<int>();
+                } else if (order_json["executed"].is_number_float()) {
+                    order.filled = static_cast<int>(order_json["executed"].get<float>());
+                }
+            }
+
+            if (order_json.contains("side") && order_json["side"].is_string()) {
+                std::string side = order_json["side"].get<std::string>();
+                if (side == "buy" || side == "Buy") {
+                    order.side = OrderSide::BUY;
+                } else if (side == "sell" || side == "Sell") {
+                    order.side = OrderSide::SELL;
+                }
+            }
+
+            if (order_json.contains("orderStatus") && order_json["orderStatus"].is_string()) {
+                std::string status = order_json["orderStatus"].get<std::string>();
+                if (status == "new" || status == "Accepted") {
+                    order.status = OrderStatus::PENDING;
+                } else if (status == "filled" || status == "Filled") {
+                    order.status = OrderStatus::FILLED;
+                } else if (status == "canceled" || status == "Canceled" || status == "Cancelled") {
+                    order.status = OrderStatus::CANCELLED;
+                } else if (status == "PartiallyFilled" || status == "Partially Filled") {
+                    order.status = OrderStatus::PARTIAL;
+                }
+            }
+
+            if (order.symbol[0] != '\0') {
+                orders.push_back(order);
+            }
+        }
+
+        LOG_I("tradezero", "Fetched %zu orders", orders.size());
+
+    } catch (const json::exception& e) {
+        LOG_E("tradezero", "Orders JSON parse failed: %s (body: %.200s)", e.what(), resp.body.c_str());
+    }
+
+    return orders;
 }
 
 TZResponse TradeZeroClient::place_order(const char* symbol, int quantity, const char* side,
@@ -258,161 +414,6 @@ TZResponse TradeZeroClient::cancel_order(const char* client_order_id) {
 TZResponse TradeZeroClient::cancel_all_orders() {
     LOG_I("tradezero", "Canceling all orders");
     return make_request("DELETE", "/accounts/orders", nullptr);
-}
-
-bool TradeZeroClient::parse_positions(const std::string& json_str, std::vector<Position>& positions) {
-    positions.clear();
-
-    try {
-        auto j = json::parse(json_str);
-
-        // Expecting JSON array
-        if (!j.is_array()) {
-            LOG_E("tradezero", "Invalid positions JSON (expected array)");
-            return false;
-        }
-
-        for (const auto& pos_json : j) {
-            Position position;
-            position.symbol[0] = '\0';
-            position.quantity = 0;
-            position.avg_price = 0.0f;
-            position.current_price = 0.0f;
-
-            // Extract position fields
-            if (pos_json.contains("symbol") && pos_json["symbol"].is_string()) {
-                std::string symbol = pos_json["symbol"].get<std::string>();
-                std::strncpy(position.symbol, symbol.c_str(), sizeof(position.symbol) - 1);
-                position.symbol[sizeof(position.symbol) - 1] = '\0';
-            }
-
-            if (pos_json.contains("shares")) {
-                // shares can be int or float
-                if (pos_json["shares"].is_number_integer()) {
-                    position.quantity = pos_json["shares"].get<int>();
-                } else if (pos_json["shares"].is_number_float()) {
-                    position.quantity = static_cast<int>(pos_json["shares"].get<float>());
-                }
-            }
-
-            if (pos_json.contains("priceAvg")) {
-                position.avg_price = pos_json["priceAvg"].get<float>();
-            }
-
-            if (pos_json.contains("priceClose")) {
-                position.current_price = pos_json["priceClose"].get<float>();
-            }
-
-            if (position.symbol[0] != '\0') {
-                positions.push_back(position);
-            }
-        }
-
-        LOG_I("tradezero", "Parsed %zu positions", positions.size());
-        return true;
-
-    } catch (const json::exception& e) {
-        LOG_E("tradezero", "Failed to parse positions JSON: %s", e.what());
-        return false;
-    }
-}
-
-bool TradeZeroClient::parse_orders(const std::string& json_str, std::vector<Order>& orders) {
-    orders.clear();
-
-    try {
-        auto j = json::parse(json_str);
-
-        // Expecting JSON array
-        if (!j.is_array()) {
-            LOG_E("tradezero", "Invalid orders JSON (expected array)");
-            return false;
-        }
-
-        for (const auto& order_json : j) {
-            Order order;
-            order.id = 0;
-            order.symbol[0] = '\0';
-            order.quantity = 0;
-            order.price = 0.0f;
-            order.side = OrderSide::BUY;
-            order.status = OrderStatus::PENDING;
-            order.client_order_id[0] = '\0';
-            order.filled = 0;
-
-            // Extract symbol
-            if (order_json.contains("symbol") && order_json["symbol"].is_string()) {
-                std::string symbol = order_json["symbol"].get<std::string>();
-                std::strncpy(order.symbol, symbol.c_str(), sizeof(order.symbol) - 1);
-                order.symbol[sizeof(order.symbol) - 1] = '\0';
-            }
-
-            // Extract clientOrderId
-            if (order_json.contains("clientOrderId") && order_json["clientOrderId"].is_string()) {
-                std::string cid = order_json["clientOrderId"].get<std::string>();
-                std::strncpy(order.client_order_id, cid.c_str(), sizeof(order.client_order_id) - 1);
-                order.client_order_id[sizeof(order.client_order_id) - 1] = '\0';
-            }
-
-            // Extract orderQuantity
-            if (order_json.contains("orderQuantity")) {
-                if (order_json["orderQuantity"].is_number_integer()) {
-                    order.quantity = order_json["orderQuantity"].get<int>();
-                } else if (order_json["orderQuantity"].is_number_float()) {
-                    order.quantity = static_cast<int>(order_json["orderQuantity"].get<float>());
-                }
-            }
-
-            // Extract limitPrice
-            if (order_json.contains("limitPrice")) {
-                order.price = order_json["limitPrice"].get<float>();
-            }
-
-            // Extract executed (filled quantity)
-            if (order_json.contains("executed")) {
-                if (order_json["executed"].is_number_integer()) {
-                    order.filled = order_json["executed"].get<int>();
-                } else if (order_json["executed"].is_number_float()) {
-                    order.filled = static_cast<int>(order_json["executed"].get<float>());
-                }
-            }
-
-            // Extract side
-            if (order_json.contains("side") && order_json["side"].is_string()) {
-                std::string side = order_json["side"].get<std::string>();
-                if (side == "buy" || side == "Buy") {
-                    order.side = OrderSide::BUY;
-                } else if (side == "sell" || side == "Sell") {
-                    order.side = OrderSide::SELL;
-                }
-            }
-
-            // Extract orderStatus
-            if (order_json.contains("orderStatus") && order_json["orderStatus"].is_string()) {
-                std::string status = order_json["orderStatus"].get<std::string>();
-                if (status == "new" || status == "Accepted") {
-                    order.status = OrderStatus::PENDING;
-                } else if (status == "filled" || status == "Filled") {
-                    order.status = OrderStatus::FILLED;
-                } else if (status == "canceled" || status == "Canceled" || status == "Cancelled") {
-                    order.status = OrderStatus::CANCELLED;
-                } else if (status == "PartiallyFilled" || status == "Partially Filled") {
-                    order.status = OrderStatus::PARTIAL;
-                }
-            }
-
-            if (order.symbol[0] != '\0') {
-                orders.push_back(order);
-            }
-        }
-
-        LOG_I("tradezero", "Parsed %zu orders", orders.size());
-        return true;
-
-    } catch (const json::exception& e) {
-        LOG_E("tradezero", "Failed to parse orders JSON: %s", e.what());
-        return false;
-    }
 }
 
 const char* TradeZeroClient::last_error() const {
