@@ -614,33 +614,11 @@ int main(int argc, char** argv) {
             }
 
             // Step 2: Fetch REST snapshot (positions, orders)
-            TZResponse resp = get_tradezero_client().get_positions();
-            if (resp.success) {
-                std::vector<Position> positions;
-                if (get_tradezero_client().parse_positions(resp.body, positions)) {
-                    LOG_I("tradezero", "Fetched %zu positions from REST API", positions.size());
-                    // Load positions into order manager
-                    g_order_manager.load_tradezero_positions(positions);
-                } else {
-                    LOG_W("tradezero", "Failed to parse positions from REST API");
-                }
-            } else {
-                LOG_W("tradezero", "Failed to fetch initial positions: %s", resp.error.c_str());
-            }
+            auto positions = get_tradezero_client().get_positions();
+            g_order_manager.load_tradezero_positions(positions);
 
-            resp = get_tradezero_client().get_orders();
-            if (resp.success) {
-                std::vector<Order> orders;
-                if (get_tradezero_client().parse_orders(resp.body, orders)) {
-                    LOG_I("tradezero", "Fetched %zu orders from REST API", orders.size());
-                    // Load orders into order manager
-                    g_order_manager.load_tradezero_orders(orders);
-                } else {
-                    LOG_W("tradezero", "Failed to parse orders from REST API");
-                }
-            } else {
-                LOG_W("tradezero", "Failed to fetch initial orders: %s", resp.error.c_str());
-            }
+            auto orders = get_tradezero_client().get_orders();
+            g_order_manager.load_tradezero_orders(orders);
 
             // Step 3: Portfolio WebSocket is already connected and subscribed
             // It's now processing buffered + new messages
@@ -814,10 +792,12 @@ int main(int argc, char** argv) {
                          account.day_trades_remaining);
 
             // Calculate position for right alignment
+            // Add extra margin to account for SameLine() spacing between colored segments
             float account_text_width = ImGui::CalcTextSize(account_text).x;
+            float spacing_margin = ImGui::GetStyle().ItemSpacing.x * 2;  // 2 SameLine() calls
             float cursor_y = ImGui::GetCursorPosY();
             ImGui::SetCursorPosY(cursor_y - ImGui::GetTextLineHeight());
-            ImGui::SetCursorPosX(window_width - account_text_width - 10.0f);
+            ImGui::SetCursorPosX(window_width - account_text_width - spacing_margin - 10.0f);
 
             // Render with color coding for P&L and day trades
             ImGui::Text("Equity: $%.2f | BP: $%.0f | Cash: $%.2f | ",
