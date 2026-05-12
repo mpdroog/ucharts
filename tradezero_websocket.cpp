@@ -268,6 +268,12 @@ void TradeZeroWebSocket::disconnect() {
     LOG_I("tradezero_ws", "Disconnecting...");
     m_running.store(false);
 
+    // Wake up lws_service() so it can check m_running and exit
+    if (m_lws_context) {
+        LOG_D("tradezero_ws", "Canceling lws_service...");
+        lws_cancel_service(m_lws_context);
+    }
+
     if (m_thread.joinable()) {
         m_thread.join();
     }
@@ -522,6 +528,14 @@ void TradeZeroWebSocket::parse_pnl_snapshot(const std::string& json_str) {
     try {
         auto j = json::parse(json_str);
 
+        // P&L data is wrapped in "pnlReturn" object
+        if (j.contains("pnlReturn") && j["pnlReturn"].is_object()) {
+            j = j["pnlReturn"];
+        } else if (!j.contains("accountValue")) {
+            LOG_E("tradezero_ws", "P&L snapshot missing pnlReturn wrapper: %.200s", json_str.c_str());
+            return;
+        }
+
         TZPnLSnapshot snapshot;
 
         // Parse account-level fields
@@ -587,6 +601,14 @@ void TradeZeroWebSocket::parse_agg_update(const std::string& json_str) {
     try {
         auto j = json::parse(json_str);
 
+        // Aggregate data is wrapped in "aggCalcs" object
+        if (j.contains("aggCalcs") && j["aggCalcs"].is_object()) {
+            j = j["aggCalcs"];
+        } else if (!j.contains("accountValue")) {
+            LOG_E("tradezero_ws", "Aggregate update missing aggCalcs wrapper: %.200s", json_str.c_str());
+            return;
+        }
+
         TZAggUpdate update;
 
         // Parse aggregate update fields
@@ -614,6 +636,14 @@ void TradeZeroWebSocket::parse_agg_update(const std::string& json_str) {
 void TradeZeroWebSocket::parse_position_pnl(const std::string& json_str) {
     try {
         auto j = json::parse(json_str);
+
+        // Position P&L data is wrapped in "position" object
+        if (j.contains("position") && j["position"].is_object()) {
+            j = j["position"];
+        } else if (!j.contains("positionId")) {
+            LOG_E("tradezero_ws", "Position P&L missing position wrapper: %.200s", json_str.c_str());
+            return;
+        }
 
         TZPositionPnL pos_pnl;
 
