@@ -805,3 +805,38 @@ void OrderManager::load_tradezero_orders(const std::vector<Order>& orders) {
         }
     }
 }
+
+void OrderManager::load_tradezero_executions(const std::vector<ClosedPosition>& executions) {
+    MutexLock lock(m_mutex);
+
+    // Load today's executions (closed trades) from TradeZero
+    for (const auto& exec : executions) {
+        // Check if we already have this execution (by symbol + exit_time)
+        bool already_exists = false;
+        for (const auto& existing : m_closed_positions) {
+            if (symbols_equal(existing.symbol, exec.symbol) &&
+                existing.exit_time == exec.exit_time &&
+                existing.quantity == exec.quantity) {
+                already_exists = true;
+                break;
+            }
+        }
+
+        if (!already_exists) {
+            m_closed_positions.push_back(exec);
+
+            LOG_I("tradezero", "Loaded execution from REST: %s qty=%d entry=%.2f exit=%.2f pnl=%.2f",
+                  exec.symbol, exec.quantity,
+                  static_cast<double>(exec.entry_price),
+                  static_cast<double>(exec.exit_price),
+                  static_cast<double>(exec.pnl_usd()));
+
+            // Save to database
+            if (m_db != nullptr && m_db->is_open()) {
+                m_db->save_closed_position(exec);
+            }
+        }
+    }
+
+    LOG_I("tradezero", "Loaded %zu executions from TradeZero", executions.size());
+}

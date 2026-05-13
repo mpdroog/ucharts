@@ -74,6 +74,7 @@ public:
     // Load initial data from TradeZero REST API
     void load_tradezero_positions(const std::vector<Position>& positions) EXCLUDES(m_mutex);
     void load_tradezero_orders(const std::vector<Order>& orders) EXCLUDES(m_mutex);
+    void load_tradezero_executions(const std::vector<ClosedPosition>& executions) EXCLUDES(m_mutex);
 
     // Helper to find order by client_order_id
     Order* find_order_by_client_id(const char* client_order_id) EXCLUDES(m_mutex);

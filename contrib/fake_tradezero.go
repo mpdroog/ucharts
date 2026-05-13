@@ -36,11 +36,25 @@ type MockOrder struct {
 	PriceAvg      float64 `json:"priceAvg"`
 }
 
+// MockExecution represents a completed trade (closed position)
+type MockExecution struct {
+	Symbol     string  `json:"symbol"`
+	Quantity   int     `json:"quantity"`
+	EntryPrice float64 `json:"entryPrice"`
+	ExitPrice  float64 `json:"exitPrice"`
+	EntryTime  int64   `json:"entryTime"`
+	ExitTime   int64   `json:"exitTime"`
+	Side       string  `json:"side"`
+}
+
 // Global state
 var (
 	orders      []MockOrder
 	ordersMu    sync.RWMutex
 	nextOrderID = 1000
+
+	executions   []MockExecution
+	executionsMu sync.RWMutex
 
 	// WebSocket clients for broadcasting events
 	wsConns   []*wsConn
@@ -92,6 +106,27 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(data); err != nil {
 		logError("REST: Failed to write orders response: %v", err)
+	}
+}
+
+func handleExecutions(w http.ResponseWriter, r *http.Request) {
+	logInfo("REST: GET %s", r.URL.Path)
+	executionsMu.RLock()
+	defer executionsMu.RUnlock()
+
+	// API returns {"executions":[...]} wrapper
+	wrapper := map[string]interface{}{
+		"executions": executions,
+	}
+	data, err := json.Marshal(wrapper)
+	if err != nil {
+		logError("REST: Failed to encode executions response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(data); err != nil {
+		logError("REST: Failed to write executions response: %v", err)
 	}
 }
 
@@ -200,6 +235,24 @@ func simulateFill(orderID, side string, limitPrice float64, qty int) {
 			orders[i].PriceAvg = limitPrice
 			logInfo("REST: Order %s filled at %.2f", orderID, limitPrice)
 			broadcastEvent(orders[i])
+
+			// Record execution (closed trade) for sell orders
+			// In real trading, a buy followed by a sell creates an execution
+			if side == "sell" {
+				executionsMu.Lock()
+				exec := MockExecution{
+					Symbol:     orders[i].Symbol,
+					Quantity:   qty,
+					EntryPrice: limitPrice + 0.10, // Mock: assume bought 10 cents higher
+					ExitPrice:  limitPrice,
+					EntryTime:  time.Now().Add(-1 * time.Hour).Unix(),
+					ExitTime:   time.Now().Unix(),
+					Side:       "Sell",
+				}
+				executions = append(executions, exec)
+				executionsMu.Unlock()
+				logInfo("REST: Recorded execution for %s qty=%d", orders[i].Symbol, qty)
+			}
 			break
 		}
 	}
@@ -317,7 +370,12 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 	// nextOrderID = 1000
 	ordersMu.Unlock()
 
-	logInfo("REST: POST reset - cleared %d orders", oldOrderCount)
+	executionsMu.Lock()
+	oldExecCount := len(executions)
+	executions = nil
+	executionsMu.Unlock()
+
+	logInfo("REST: POST reset - cleared %d orders, %d executions", oldOrderCount, oldExecCount)
 
 	data, err := json.Marshal(map[string]bool{"success": true})
 	if err != nil {
@@ -625,6 +683,8 @@ func main() {
 		path := r.URL.Path
 		if strings.HasSuffix(path, "/positions") {
 			handlePositions(w, r)
+		} else if strings.HasSuffix(path, "/executions") {
+			handleExecutions(w, r)
 		} else if strings.HasSuffix(path, "/orders") {
 			if r.Method == http.MethodDelete {
 				handleCancelAllOrders(w, r)

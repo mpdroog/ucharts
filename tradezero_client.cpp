@@ -361,6 +361,90 @@ std::vector<Order> TradeZeroClient::get_orders() {
     return orders;
 }
 
+std::vector<ClosedPosition> TradeZeroClient::get_executions() {
+    std::vector<ClosedPosition> executions;
+
+    char endpoint[128];
+    std::snprintf(endpoint, sizeof(endpoint), "/accounts/%s/executions", m_account_id);
+
+    TZResponse resp = make_request("GET", endpoint, nullptr);
+    if (!resp.success) {
+        LOG_W("tradezero", "Failed to fetch executions: HTTP %d", resp.status_code);
+        return executions;
+    }
+
+    try {
+        auto j = json::parse(resp.body);
+
+        // API returns {"executions":[...]} wrapper
+        if (j.is_object() && j.contains("executions") && j["executions"].is_array()) {
+            j = j["executions"];
+        } else if (!j.is_array()) {
+            LOG_E("tradezero", "Executions response not array: %.200s", resp.body.c_str());
+            return executions;
+        }
+
+        for (const auto& exec_json : j) {
+            ClosedPosition closed;
+            closed.symbol[0] = '\0';
+            closed.quantity = 0;
+            closed.entry_price = 0.0f;
+            closed.exit_price = 0.0f;
+            closed.entry_time = 0;
+            closed.exit_time = 0;
+
+            if (exec_json.contains("symbol") && exec_json["symbol"].is_string()) {
+                std::string symbol = exec_json["symbol"].get<std::string>();
+                std::strncpy(closed.symbol, symbol.c_str(), sizeof(closed.symbol) - 1);
+                closed.symbol[sizeof(closed.symbol) - 1] = '\0';
+            }
+
+            if (exec_json.contains("quantity")) {
+                if (exec_json["quantity"].is_number_integer()) {
+                    closed.quantity = exec_json["quantity"].get<int>();
+                } else if (exec_json["quantity"].is_number_float()) {
+                    closed.quantity = static_cast<int>(exec_json["quantity"].get<float>());
+                }
+            }
+
+            // Entry price (average fill price for the opening trade)
+            if (exec_json.contains("entryPrice")) {
+                closed.entry_price = exec_json["entryPrice"].get<float>();
+            } else if (exec_json.contains("priceAvg")) {
+                closed.entry_price = exec_json["priceAvg"].get<float>();
+            }
+
+            // Exit price (average fill price for the closing trade)
+            if (exec_json.contains("exitPrice")) {
+                closed.exit_price = exec_json["exitPrice"].get<float>();
+            } else if (exec_json.contains("price")) {
+                closed.exit_price = exec_json["price"].get<float>();
+            }
+
+            // Parse timestamps if available
+            if (exec_json.contains("entryTime") && exec_json["entryTime"].is_number()) {
+                closed.entry_time = exec_json["entryTime"].get<int64_t>();
+            }
+            if (exec_json.contains("exitTime") && exec_json["exitTime"].is_number()) {
+                closed.exit_time = exec_json["exitTime"].get<int64_t>();
+            } else if (exec_json.contains("timestamp") && exec_json["timestamp"].is_number()) {
+                closed.exit_time = exec_json["timestamp"].get<int64_t>();
+            }
+
+            if (closed.symbol[0] != '\0' && closed.quantity > 0) {
+                executions.push_back(closed);
+            }
+        }
+
+        LOG_I("tradezero", "Fetched %zu executions", executions.size());
+
+    } catch (const json::exception& e) {
+        LOG_E("tradezero", "Executions JSON parse failed: %s (body: %.200s)", e.what(), resp.body.c_str());
+    }
+
+    return executions;
+}
+
 TZResponse TradeZeroClient::place_order(const char* symbol, int quantity, const char* side,
                                         const char* order_type, float limit_price, float stop_price) {
     if (symbol == nullptr || side == nullptr || order_type == nullptr) {

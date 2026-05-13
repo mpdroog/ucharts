@@ -33,6 +33,7 @@ public:
     // Returns parsed data directly; empty vector on failure (errors logged internally)
     std::vector<Position> get_positions();
     std::vector<Order> get_orders();
+    std::vector<ClosedPosition> get_executions();  // Today's executed trades
 
     // Order operations (no WebSocket equivalent)
     TZResponse place_order(const char* symbol, int quantity, const char* side,
