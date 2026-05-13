@@ -255,8 +255,21 @@ static void get_nyc_time(char* buf, size_t buf_size) {
     snprintf(buf, buf_size, "%02d:%02d:%02d (NYSE)", hour, utc->tm_min, utc->tm_sec);
 }
 
+// Forward declaration
+static void update_charts_for_selected_ticker();
+
 // Handle hotkey orders
 static void process_hotkeys() {
+    // TAB cycles through ticker widgets
+    if (ImGui::IsKeyPressed(ImGuiKey_Tab) && !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift) {
+        g_selected_ticker = (g_selected_ticker + 1) % NUM_TICKERS;
+        for (int i = 0; i < NUM_TICKERS; i++) {
+            g_ticker_widgets[i].set_selected(i == g_selected_ticker);
+        }
+        update_charts_for_selected_ticker();
+        g_ticker_widgets[g_selected_ticker].focus_order_entry();
+    }
+
     if (g_selected_ticker < 0 || g_selected_ticker >= NUM_TICKERS) return;
 
     const char* symbol = g_ticker_widgets[g_selected_ticker].get_symbol();
@@ -613,12 +626,15 @@ int main(int argc, char** argv) {
                 return;
             }
 
-            // Step 2: Fetch REST snapshot (positions, orders)
+            // Step 2: Fetch REST snapshot (positions, orders, executions)
             auto positions = get_tradezero_client().get_positions();
             g_order_manager.load_tradezero_positions(positions);
 
             auto orders = get_tradezero_client().get_orders();
             g_order_manager.load_tradezero_orders(orders);
+
+            auto executions = get_tradezero_client().get_executions();
+            g_order_manager.load_tradezero_executions(executions);
 
             // Step 3: Portfolio WebSocket is already connected and subscribed
             // It's now processing buffered + new messages

@@ -12,6 +12,7 @@ TickerWidget::TickerWidget()
     , m_order_mgr(nullptr)
     , m_order_qty(100)
     , m_order_price(0.0f)
+    , m_focus_qty(false)
     , m_editing_symbol(false)
     , m_edit_frames(0)
     , m_last(0.0f)
@@ -72,6 +73,10 @@ void TickerWidget::set_error(const char* msg) {
 
 void TickerWidget::clear_error() {
     m_error_msg[0] = '\0';
+}
+
+void TickerWidget::focus_order_entry() {
+    m_focus_qty = true;
 }
 
 void TickerWidget::set_order_quantity(int qty) {
@@ -529,6 +534,10 @@ void TickerWidget::render_order_entry(float width) {
     float button_height = 16.0f;
 
     // Quantity input with "Qty" placeholder
+    if (m_focus_qty) {
+        ImGui::SetKeyboardFocusHere();
+        m_focus_qty = false;
+    }
     ImGui::PushItemWidth(qty_width);
     if (ImGui::InputTextWithHint("##Qty", "Qty", m_qty_input, sizeof(m_qty_input), ImGuiInputTextFlags_CharsDecimal)) {
         m_order_qty = atoi(m_qty_input);

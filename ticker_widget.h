@@ -36,6 +36,9 @@ public:
     int get_order_quantity() const;
     float get_order_price() const;
 
+    // Focus the order entry Qty field
+    void focus_order_entry();
+
     // Render the ticker widget
     // Returns true if clicked (for selection)
     bool render(ImVec2 size);
@@ -55,6 +58,7 @@ private:
     float m_order_price;
     char m_qty_input[16];
     char m_price_input[16];
+    bool m_focus_qty;
     char m_symbol_input[MAX_SYMBOL_LEN];
     bool m_editing_symbol;
     int m_edit_frames;  // Frame counter since editing started
