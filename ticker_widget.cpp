@@ -153,10 +153,6 @@ void TickerWidget::update_market_data() {
         (void)m_market->get_time_sales(m_symbol, m_time_sales, MAX_TIME_SALES_ROWS);
     }
 
-    // Update default order price to best ask if not set
-    if (m_order_price <= 0.0f && m_best_ask > 0.0f) {
-        set_order_price(m_best_ask);
-    }
 }
 
 void TickerWidget::update_time_sales_from_l1() {
@@ -239,25 +235,6 @@ void TickerWidget::render_level1(float width) {
 
     ImGui::PushStyleColor(ImGuiCol_Text, make_color(255, 80, 80, 255));  // Red for ask
     ImGui::Text("A: %.2f", static_cast<double>(m_best_ask));
-    ImGui::PopStyleColor();
-
-    // Row 2: High | Low | Volume (in K or M)
-    ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));  // Gray for secondary info
-
-    ImGui::Text("H: %.2f", static_cast<double>(m_high));
-    ImGui::SameLine(col_width);
-    ImGui::Text("L: %.2f", static_cast<double>(m_low));
-    ImGui::SameLine(col_width * 2.0f);
-
-    // Format volume (K for thousands, M for millions)
-    if (m_volume >= 1000000) {
-        ImGui::Text("V: %.1fM", static_cast<double>(m_volume) / 1000000.0);
-    } else if (m_volume >= 1000) {
-        ImGui::Text("V: %.1fK", static_cast<double>(m_volume) / 1000.0);
-    } else {
-        ImGui::Text("V: %lld", static_cast<long long>(m_volume));
-    }
-
     ImGui::PopStyleColor();
 }
 
@@ -545,15 +522,33 @@ void TickerWidget::render_time_sales(ImVec2 size, int /* max_rows */) {
 }
 
 void TickerWidget::render_order_entry(float width) {
-    // Ultra-compact order entry: Qty input + BUY/SELL buttons on one line
-    float input_width = width * 0.25f;
-    float button_width = (width - input_width) / 2.0f;
+    // Ultra-compact order entry: Qty + Price inputs + BUY/SELL buttons on one line
+    float qty_width = width * 0.18f;
+    float price_width = width * 0.22f;
+    float button_width = (width - qty_width - price_width) / 2.0f;
     float button_height = 16.0f;
 
-    ImGui::PushItemWidth(input_width);
-    if (ImGui::InputText("##Qty", m_qty_input, sizeof(m_qty_input), ImGuiInputTextFlags_CharsDecimal)) {
+    // Quantity input with "Qty" placeholder
+    ImGui::PushItemWidth(qty_width);
+    if (ImGui::InputTextWithHint("##Qty", "Qty", m_qty_input, sizeof(m_qty_input), ImGuiInputTextFlags_CharsDecimal)) {
         m_order_qty = atoi(m_qty_input);
         if (m_order_qty < 0) m_order_qty = 0;
+    }
+    ImGui::PopItemWidth();
+
+    ImGui::SameLine(0, 0);
+
+    // Price input with placeholder showing ask+0.05
+    char price_hint[16];
+    if (m_best_ask > 0.0f) {
+        snprintf(price_hint, sizeof(price_hint), "%.2f", static_cast<double>(m_best_ask + ORDER_OFFSET));
+    } else {
+        price_hint[0] = '\0';
+    }
+    ImGui::PushItemWidth(price_width);
+    if (ImGui::InputTextWithHint("##Price", price_hint, m_price_input, sizeof(m_price_input), ImGuiInputTextFlags_CharsDecimal)) {
+        m_order_price = static_cast<float>(atof(m_price_input));
+        if (m_order_price < 0.0f) m_order_price = 0.0f;
     }
     ImGui::PopItemWidth();
 
@@ -564,9 +559,11 @@ void TickerWidget::render_order_entry(float width) {
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, make_color(0, 200, 0, 255));
 
     if (ImGui::Button("BUY", ImVec2(button_width, button_height))) {
-        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && m_best_ask > 0.0f) {
-            LOG_I("ticker", "BUY order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(m_best_ask + 0.05f));
-            m_order_mgr->buy(m_symbol, m_order_qty, m_best_ask + 0.05f);
+        // Use manual price if entered, otherwise ask+offset
+        float buy_price = (m_order_price > 0.0f) ? m_order_price : (m_best_ask + ORDER_OFFSET);
+        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && buy_price > 0.0f) {
+            LOG_I("ticker", "BUY order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(buy_price));
+            m_order_mgr->buy(m_symbol, m_order_qty, buy_price);
         }
     }
 
@@ -579,9 +576,11 @@ void TickerWidget::render_order_entry(float width) {
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, make_color(255, 0, 0, 255));
 
     if (ImGui::Button("SELL", ImVec2(button_width, button_height))) {
-        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && m_best_bid > 0.0f) {
-            LOG_I("ticker", "SELL order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(m_best_bid - 0.05f));
-            m_order_mgr->sell(m_symbol, m_order_qty, m_best_bid - 0.05f);
+        // Use manual price if entered, otherwise bid-offset
+        float sell_price = (m_order_price > 0.0f) ? m_order_price : (m_best_bid - ORDER_OFFSET);
+        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && sell_price > 0.0f) {
+            LOG_I("ticker", "SELL order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(sell_price));
+            m_order_mgr->sell(m_symbol, m_order_qty, sell_price);
         }
     }
 

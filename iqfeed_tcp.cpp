@@ -629,7 +629,7 @@ bool IQFeedLevel1::set_protocol() {
     // Request specific fields in order matching our parser:
     // Symbol (always first, implicit), Last, Last Size, Last Time, Total Volume,
     // Bid, Bid Size, Ask, Ask Size, High, Low, Open, Close
-    if (!send_command("S,SELECT UPDATE FIELDS,Last,Last Size,Last Time,Total Volume,Bid,Bid Size,Ask,Ask Size,High,Low,Open,Close\r\n")) {
+    if (!send_command("S,SELECT UPDATE FIELDS,Most Recent Trade,Most Recent Trade Size,Most Recent Trade Time,Total Volume,Bid,Bid Size,Ask,Ask Size,High,Low,Open,Close\r\n")) {
         return false;
     }
 
@@ -676,6 +676,19 @@ void IQFeedLevel1::parse_field_names(const std::string& line) {
         field[i] = '\0';
         if (*start == ',') start++;
 
+        // IQFeed reports some fields in FIELDNAMES that it doesn't actually send in data.
+        // Skip these phantom fields - don't count them towards the index.
+        bool is_phantom = (std::strcmp(field, "Most Recent Trade Market Center") == 0 ||
+                          std::strcmp(field, "Most Recent Trade Conditions") == 0 ||
+                          std::strcmp(field, "Message Contents") == 0);
+
+        if (is_phantom) {
+            LOG_D("iqfeed", "L1 field[skip] = '%s' (phantom - not in data)", field);
+            continue;  // Don't increment index
+        }
+
+        LOG_D("iqfeed", "L1 field[%d] = '%s'", index, field);
+
         // Map field name to index (Symbol is 0, first data field is 1)
         if (std::strcmp(field, "Last") == 0 || std::strcmp(field, "Most Recent Trade") == 0) {
             m_idx_last = index;
@@ -685,11 +698,11 @@ void IQFeedLevel1::parse_field_names(const std::string& line) {
             m_idx_last_time = index;
         } else if (std::strcmp(field, "Total Volume") == 0) {
             m_idx_total_vol = index;
-        } else if (std::strcmp(field, "Bid") == 0) {
+        } else if (std::strcmp(field, "Bid") == 0 || std::strcmp(field, "Bid Price") == 0) {
             m_idx_bid = index;
         } else if (std::strcmp(field, "Bid Size") == 0) {
             m_idx_bid_size = index;
-        } else if (std::strcmp(field, "Ask") == 0) {
+        } else if (std::strcmp(field, "Ask") == 0 || std::strcmp(field, "Ask Price") == 0) {
             m_idx_ask = index;
         } else if (std::strcmp(field, "Ask Size") == 0) {
             m_idx_ask_size = index;
@@ -706,9 +719,9 @@ void IQFeedLevel1::parse_field_names(const std::string& line) {
         index++;
     }
 
-    LOG_D("iqfeed", "L1 field indices: last=%d size=%d time=%d vol=%d bid=%d ask=%d open=%d high=%d low=%d close=%d",
+    LOG_D("iqfeed", "L1 field indices: last=%d last_size=%d time=%d vol=%d bid=%d bid_size=%d ask=%d ask_size=%d open=%d high=%d low=%d close=%d",
           m_idx_last, m_idx_last_size, m_idx_last_time, m_idx_total_vol,
-          m_idx_bid, m_idx_ask, m_idx_open, m_idx_high, m_idx_low, m_idx_close);
+          m_idx_bid, m_idx_bid_size, m_idx_ask, m_idx_ask_size, m_idx_open, m_idx_high, m_idx_low, m_idx_close);
 }
 
 bool IQFeedLevel1::send_command(const char* cmd) {
@@ -895,6 +908,7 @@ void IQFeedLevel1::parse_summary_message(const char* data) EXCLUDES(m_mutex) {
     int bid_size = (m_idx_bid_size >= 0) ? std::atoi(get_field(m_idx_bid_size)) : 0;
     float ask = (m_idx_ask >= 0) ? static_cast<float>(std::atof(get_field(m_idx_ask))) : 0;
     int ask_size = (m_idx_ask_size >= 0) ? std::atoi(get_field(m_idx_ask_size)) : 0;
+
     float open = (m_idx_open >= 0) ? static_cast<float>(std::atof(get_field(m_idx_open))) : 0;
     float high = (m_idx_high >= 0) ? static_cast<float>(std::atof(get_field(m_idx_high))) : 0;
     float low = (m_idx_low >= 0) ? static_cast<float>(std::atof(get_field(m_idx_low))) : 0;
