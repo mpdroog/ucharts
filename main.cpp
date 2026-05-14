@@ -13,6 +13,7 @@
 #include "database.h"
 #include "market_data.h"
 #include "order_manager.h"
+#include "toast.h"
 #include "chart_widget.h"
 #include "ticker_widget.h"
 #include "positions_widget.h"
@@ -587,6 +588,13 @@ int main(int argc, char** argv) {
         // Set TradeZero client in order manager
         g_order_manager.set_tradezero_client(&get_tradezero_client());
 
+        // Set error callback for order rejections (shows toast notification)
+        g_order_manager.set_error_callback([](const char* symbol, const char* error) {
+            char msg[128];
+            std::snprintf(msg, sizeof(msg), "%s: %s", symbol, error);
+            get_toast_manager().error(msg);
+        });
+
         // Set WebSocket callbacks BEFORE connecting
         get_tradezero_pnl().set_pnl_snapshot_callback([](const TZPnLSnapshot& snapshot) {
             std::lock_guard<std::mutex> lock(g_tz_account_mutex);
@@ -612,6 +620,23 @@ int main(int argc, char** argv) {
 
         get_tradezero_portfolio().set_position_callback([](const TZPositionUpdate& update) {
             g_order_manager.on_tradezero_position_update(update);
+        });
+
+        // Connection status toasts for user awareness
+        get_tradezero_portfolio().set_connection_callback([](bool connected) {
+            if (connected) {
+                get_toast_manager().success("TradeZero Portfolio connected");
+            } else {
+                get_toast_manager().warning("TradeZero Portfolio disconnected");
+            }
+        });
+
+        get_tradezero_pnl().set_connection_callback([](bool connected) {
+            if (connected) {
+                get_toast_manager().success("TradeZero P&L connected");
+            } else {
+                get_toast_manager().warning("TradeZero P&L disconnected");
+            }
         });
 
         // Initialize in background thread (per TradeZero docs)
@@ -774,11 +799,15 @@ int main(int argc, char** argv) {
         ImGui::TextColored(lu_ok ? col_green : col_red, "LU");
         ImGui::SameLine();
 
-        // TradeZero status indicator
+        // TradeZero status indicators (REST, Portfolio WebSocket, P&L WebSocket)
         bool tz_rest_ok = get_tradezero_client().is_configured();
-        bool tz_ws_ok = get_tradezero_portfolio().is_connected() && get_tradezero_pnl().is_connected();
-        bool tz_ok = tz_rest_ok && tz_ws_ok;
-        ImGui::TextColored(tz_ok ? col_green : col_red, "TZ");
+        bool tz_ord_ok = get_tradezero_portfolio().is_connected();
+        bool tz_pnl_ok = get_tradezero_pnl().is_connected();
+        ImGui::TextColored(tz_rest_ok ? col_green : col_red, "TZ");
+        ImGui::SameLine();
+        ImGui::TextColored(tz_ord_ok ? col_green : col_red, "Ord");
+        ImGui::SameLine();
+        ImGui::TextColored(tz_pnl_ok ? col_green : col_red, "PnL");
         ImGui::SameLine();
 
         // Clock (centered)
@@ -789,8 +818,8 @@ int main(int argc, char** argv) {
         ImGui::SetCursorPosX((window_width - text_width) / 2.0f);
         ImGui::Text("%s", time_str);
 
-        // Account info (right-aligned) - only show if TradeZero is connected
-        if (tz_ok) {
+        // Account info (right-aligned) - only show if TradeZero P&L stream is connected
+        if (tz_pnl_ok) {
             TZAccountInfo account;
             {
                 std::lock_guard<std::mutex> lock(g_tz_account_mutex);
@@ -1082,6 +1111,9 @@ int main(int argc, char** argv) {
         ImGui::PopStyleVar();  // Pop ItemSpacing
 
         ImGui::End();
+
+        // Render toast notifications (on top of everything)
+        get_toast_manager().render();
 
         ImGui::Render();
         int display_w = 0;

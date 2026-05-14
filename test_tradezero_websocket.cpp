@@ -19,6 +19,8 @@ static std::atomic<bool> g_agg_update_called{false};
 static std::atomic<bool> g_position_pnl_called{false};
 static std::atomic<bool> g_order_called{false};
 static std::atomic<bool> g_position_called{false};
+static std::atomic<bool> g_connection_callback_called{false};
+static std::atomic<bool> g_last_connection_state{false};
 
 static TZPnLSnapshot g_last_pnl_snapshot;
 static TZAggUpdate g_last_agg_update;
@@ -33,6 +35,8 @@ void reset_test_state() {
     g_position_pnl_called = false;
     g_order_called = false;
     g_position_called = false;
+    g_connection_callback_called = false;
+    g_last_connection_state = false;
 }
 
 // ============================================================================
@@ -121,7 +125,24 @@ TEST(websocket_callbacks) {
         g_last_position = pos;
     });
 
+    ws.set_connection_callback([](bool connected) {
+        g_connection_callback_called = true;
+        g_last_connection_state = connected;
+    });
+
     // Callbacks are set (no public way to verify, but no crash is good)
+}
+
+TEST(websocket_connection_callback_can_be_set) {
+    TradeZeroWebSocket ws;
+    reset_test_state();
+
+    ws.set_connection_callback([](bool connected) {
+        g_connection_callback_called = true;
+        g_last_connection_state = connected;
+    });
+
+    // Callback is set (actual connection test requires mock server)
 }
 
 TEST(pnl_snapshot_copy) {
@@ -471,6 +492,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(websocket_initialization);
     RUN_TEST(websocket_credentials);
     RUN_TEST(websocket_callbacks);
+    RUN_TEST(websocket_connection_callback_can_be_set);
 
     // Copy and data tests
     RUN_TEST(pnl_snapshot_copy);

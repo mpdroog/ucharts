@@ -18,7 +18,8 @@ OrderManager& get_order_manager() {
 }
 
 OrderManager::OrderManager()
-    : m_db(nullptr), m_market(nullptr), m_next_order_id(1) {
+    : m_db(nullptr), m_market(nullptr), m_tradezero_client(nullptr), m_next_order_id(1) {
+    m_error[0] = '\0';
 }
 
 OrderManager::~OrderManager() {
@@ -37,6 +38,8 @@ void OrderManager::reset() {
     m_next_order_id = 1;
     m_order_callback = nullptr;
     m_position_callback = nullptr;
+    m_error_callback = nullptr;
+    m_error[0] = '\0';
 }
 
 int64_t OrderManager::get_current_timestamp() const {
@@ -77,6 +80,8 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
 
         if (!resp.success) {
             LOG_E("orders", "TradeZero buy failed: %s", resp.error.c_str());
+            // Store error for UI display
+            safe_strcpy(m_error, resp.error.c_str(), sizeof(m_error));
             // Remove the pending order we added
             for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
                 if (it->id == local_order_id) {
@@ -86,6 +91,7 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
             }
             return -1;
         }
+        m_error[0] = '\0';  // Clear error on success
 
         // Extract clientOrderId from response JSON and update our local order
         char client_order_id[64];
@@ -186,6 +192,8 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
 
         if (!resp.success) {
             LOG_E("orders", "TradeZero sell failed: %s", resp.error.c_str());
+            // Store error for UI display
+            safe_strcpy(m_error, resp.error.c_str(), sizeof(m_error));
             // Remove the pending order we added
             for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
                 if (it->id == local_order_id) {
@@ -195,6 +203,7 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
             }
             return -1;
         }
+        m_error[0] = '\0';  // Clear error on success
 
         // Extract clientOrderId from response JSON
         char client_order_id[64];
@@ -493,6 +502,11 @@ void OrderManager::set_position_callback(PositionCallback cb) {
     m_position_callback = cb;
 }
 
+void OrderManager::set_error_callback(OrderErrorCallback cb) {
+    MutexLock lock(m_mutex);
+    m_error_callback = cb;
+}
+
 void OrderManager::load_from_database() {
     if (m_db == nullptr || !m_db->is_open()) return;
 
@@ -549,6 +563,8 @@ Order* OrderManager::find_order_by_client_id_locked(const char* client_order_id)
 void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
     MutexLock lock(m_mutex);
 
+    bool was_rejected = false;  // Track if order was rejected (for error callback)
+
     // Find order by client_order_id
     Order* order = find_order_by_client_id_locked(update.client_order_id);
 
@@ -594,6 +610,11 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
                    std::strcmp(update.order_status, "Cancelled") == 0) {
             // Accept both American (Canceled) and British (Cancelled) spelling
             new_order.status = OrderStatus::CANCELLED;
+        } else if (std::strcmp(update.order_status, "Rejected") == 0) {
+            new_order.status = OrderStatus::CANCELLED;  // Treat rejected as cancelled
+            was_rejected = true;
+            LOG_W("orders", "New order REJECTED: %s %s qty=%d",
+                  update.side, update.symbol, update.order_quantity);
         } else if (update.executed > 0 && update.executed < update.order_quantity) {
             new_order.status = OrderStatus::PARTIAL;
         } else {
@@ -618,6 +639,11 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
                    std::strcmp(update.order_status, "Cancelled") == 0) {
             // Accept both American (Canceled) and British (Cancelled) spelling
             order->status = OrderStatus::CANCELLED;
+        } else if (std::strcmp(update.order_status, "Rejected") == 0) {
+            order->status = OrderStatus::CANCELLED;  // Treat rejected as cancelled
+            was_rejected = true;
+            LOG_W("orders", "Order REJECTED: %s %s qty=%d - %s",
+                  update.side, update.symbol, update.order_quantity, update.order_status);
         } else if (update.executed > 0 && update.executed < update.order_quantity) {
             order->status = OrderStatus::PARTIAL;
         } else {
@@ -657,6 +683,11 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
                 m_pending_orders.erase(it);
                 break;
             }
+        }
+
+        // Notify error callback for rejected orders
+        if (was_rejected && m_error_callback) {
+            m_error_callback(update.symbol, "Order rejected by broker");
         }
     }
 
@@ -743,6 +774,10 @@ const std::vector<ClosedPosition>& OrderManager::get_todays_closed_positions() c
     // For now, return all closed positions
     // TODO: Filter to only today's trades when we have proper timestamps
     return m_closed_positions;
+}
+
+const char* OrderManager::last_error() const {
+    return m_error;
 }
 
 void OrderManager::load_tradezero_positions(const std::vector<Position>& positions) {

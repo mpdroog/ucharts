@@ -18,6 +18,8 @@ struct TZPnLSnapshot;
 // Callback for order events
 typedef std::function<void(const Order&)> OrderCallback;
 typedef std::function<void(const Position&)> PositionCallback;
+// Callback for order errors (symbol, error message)
+typedef std::function<void(const char* symbol, const char* error)> OrderErrorCallback;
 
 // Order manager for executing orders and tracking positions
 class OrderManager {
@@ -57,6 +59,7 @@ public:
     // Set callbacks
     void set_order_callback(OrderCallback cb) EXCLUDES(m_mutex);
     void set_position_callback(PositionCallback cb) EXCLUDES(m_mutex);
+    void set_error_callback(OrderErrorCallback cb) EXCLUDES(m_mutex);
 
     // Load from database
     void load_from_database() EXCLUDES(m_mutex);
@@ -79,6 +82,9 @@ public:
     // Helper to find order by client_order_id
     Order* find_order_by_client_id(const char* client_order_id) EXCLUDES(m_mutex);
 
+    // Get last error message (for UI display)
+    const char* last_error() const;
+
 private:
     mutable Mutex m_mutex;  // Protects all member data below
     Database* m_db;
@@ -90,6 +96,8 @@ private:
     int64_t m_next_order_id GUARDED_BY(m_mutex);
     OrderCallback m_order_callback GUARDED_BY(m_mutex);
     PositionCallback m_position_callback GUARDED_BY(m_mutex);
+    OrderErrorCallback m_error_callback GUARDED_BY(m_mutex);
+    char m_error[256];  // Last error message for UI display
 
     void update_position_on_buy(const char* symbol, int quantity, float price);
     void update_position_on_sell(const char* symbol, int quantity, float price);

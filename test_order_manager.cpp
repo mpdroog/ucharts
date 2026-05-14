@@ -544,6 +544,63 @@ TEST(order_callback) {
     ASSERT_TRUE(callback_count.load() >= 3);
 }
 
+TEST(error_callback_can_be_set) {
+    init_test_env();
+    reset_order_manager();
+
+    std::atomic<int> error_count{0};
+    std::string last_symbol;
+    std::string last_error;
+
+    g_test_om.set_error_callback([&error_count, &last_symbol, &last_error](const char* symbol, const char* error) {
+        error_count.fetch_add(1);
+        last_symbol = symbol;
+        last_error = error;
+    });
+
+    // Error callback is set (actual error testing requires rejected order via WebSocket)
+    ASSERT_EQ(error_count.load(), 0);
+}
+
+TEST(error_callback_on_rejected_order) {
+    init_test_env();
+    reset_order_manager();
+
+    std::atomic<int> error_count{0};
+    std::string last_symbol;
+    std::string last_error;
+
+    g_test_om.set_error_callback([&error_count, &last_symbol, &last_error](const char* symbol, const char* error) {
+        error_count.fetch_add(1);
+        last_symbol = symbol;
+        last_error = error;
+    });
+
+    // First create an order that we can reject
+    int64_t id = g_test_om.buy("TEST", 100, 100.10f);
+    ASSERT_TRUE(id > 0);
+    ASSERT_EQ(g_test_om.get_pending_orders().size(), 1u);
+
+    // Simulate a rejected order update from WebSocket
+    TZOrderUpdate rejected_update;
+    std::strncpy(rejected_update.symbol, "TEST", sizeof(rejected_update.symbol));
+    char client_id[32];
+    std::snprintf(client_id, sizeof(client_id), "%lld", static_cast<long long>(id));
+    std::strncpy(rejected_update.client_order_id, client_id, sizeof(rejected_update.client_order_id));
+    std::strncpy(rejected_update.order_status, "Rejected", sizeof(rejected_update.order_status));
+    std::strncpy(rejected_update.side, "Buy", sizeof(rejected_update.side));
+    rejected_update.order_quantity = 100;
+
+    // This should trigger the error callback
+    g_test_om.on_tradezero_order_update(rejected_update);
+
+    ASSERT_EQ(error_count.load(), 1);
+    ASSERT_STREQ(last_symbol.c_str(), "TEST");
+    ASSERT_TRUE(last_error.find("rejected") != std::string::npos ||
+                last_error.find("REJECTED") != std::string::npos ||
+                last_error.find("Rejected") != std::string::npos);
+}
+
 TEST(persistence) {
     // Use global test environment with WebSocket
     init_test_env();
@@ -630,6 +687,8 @@ int main(int argc, char* argv[]) {
     RUN_TEST(load_tradezero_executions);
     RUN_TEST(load_tradezero_executions_deduplicates);
     RUN_TEST(order_callback);
+    RUN_TEST(error_callback_can_be_set);
+    RUN_TEST(error_callback_on_rejected_order);
     RUN_TEST(persistence);
 
     cleanup_test_data();

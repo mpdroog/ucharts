@@ -181,7 +181,33 @@ TZResponse TradeZeroClient::make_request(const char* method, const char* endpoin
     response.success = (http_code >= 200 && http_code < 300);
 
     if (!response.success) {
-        std::snprintf(m_error, sizeof(m_error), "HTTP %d", static_cast<int>(http_code));
+        // Try to parse error message from JSON response body
+        bool parsed_error = false;
+        if (!response_body.empty()) {
+            try {
+                auto err_json = json::parse(response_body);
+                // Try common error message fields
+                if (err_json.contains("message") && err_json["message"].is_string()) {
+                    safe_strcpy(m_error, err_json["message"].get<std::string>().c_str(), sizeof(m_error));
+                    parsed_error = true;
+                } else if (err_json.contains("error") && err_json["error"].is_string()) {
+                    safe_strcpy(m_error, err_json["error"].get<std::string>().c_str(), sizeof(m_error));
+                    parsed_error = true;
+                } else if (err_json.contains("errorMessage") && err_json["errorMessage"].is_string()) {
+                    safe_strcpy(m_error, err_json["errorMessage"].get<std::string>().c_str(), sizeof(m_error));
+                    parsed_error = true;
+                }
+            } catch (const json::exception&) {
+                // Not valid JSON, use raw body if short enough
+                if (response_body.size() < sizeof(m_error) - 1) {
+                    safe_strcpy(m_error, response_body.c_str(), sizeof(m_error));
+                    parsed_error = true;
+                }
+            }
+        }
+        if (!parsed_error) {
+            std::snprintf(m_error, sizeof(m_error), "HTTP %d", static_cast<int>(http_code));
+        }
         response.error = m_error;
         LOG_E("tradezero", "HTTP %d: %s (URL: %s)", static_cast<int>(http_code),
               response_body.c_str(), url.c_str());

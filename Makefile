@@ -88,7 +88,7 @@ CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 IMGUI_CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 
 # Main sources
-MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp
+MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp toast.cpp
 MAIN_OBJS = $(MAIN_SRCS:.cpp=.o)
 
 TARGET = ucharts
@@ -121,7 +121,7 @@ check-deps:
 
 # Test targets
 # Usage: make test (quiet) or make test V=1 (verbose)
-test: test_logic test_database test_market_data test_order_manager test_integration test_async_io test_tradezero_config test_tradezero_client test_tradezero_websocket contrib/fake_iqfeed contrib/fake_tradezero
+test: test_logic test_database test_market_data test_order_manager test_integration test_async_io test_tradezero_config test_tradezero_client test_tradezero_websocket test_toast contrib/fake_iqfeed contrib/fake_tradezero
 	@./run_integration_tests.sh $(if $(V),-v,)
 
 # Shared test object files (compiled once with test flags)
@@ -169,6 +169,13 @@ test_tradezero_client: test_tradezero_client.cpp $(TEST_OBJS_DIR)/tradezero_clie
 test_tradezero_websocket: test_tradezero_websocket.cpp $(TEST_OBJS_DIR)/tradezero_websocket.o test_common.h
 	$(CXX) $(TEST_CXXFLAGS) -pthread -o $@ test_tradezero_websocket.cpp $(TEST_OBJS_DIR)/tradezero_websocket.o $(TEST_LDFLAGS)
 
+# Toast test needs special object with TOAST_TEST_MODE to skip ImGui rendering
+$(TEST_OBJS_DIR)/toast.o: toast.cpp | $(TEST_OBJS_DIR)
+	$(CXX) $(TEST_CXXFLAGS) -DTOAST_TEST_MODE -c -o $@ $<
+
+test_toast: test_toast.cpp $(TEST_OBJS_DIR)/toast.o test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -DTOAST_TEST_MODE -o $@ test_toast.cpp $(TEST_OBJS_DIR)/toast.o $(TEST_LDFLAGS)
+
 # Mock servers for integration testing (Go)
 contrib/fake_iqfeed: contrib/fake_iqfeed.go
 	cd contrib && go build -o fake_iqfeed fake_iqfeed.go
@@ -199,7 +206,7 @@ thread-check-strict:
 	@echo "Strict analysis complete (some warnings expected - documents lock acquisition points)!"
 
 clean:
-	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_tradezero_config test_tradezero_client test_tradezero_websocket test_ucharts.db test_order_manager.db test_integration.db
+	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_tradezero_config test_tradezero_client test_tradezero_websocket test_toast test_ucharts.db test_order_manager.db test_integration.db
 	rm -rf $(TEST_OBJS_DIR)
 	rm -f contrib/fake_iqfeed contrib/fake_tradezero contrib/test_with_mocks
 	rm -f .fake_iqfeed.pid .fake_tradezero.pid contrib/.fake_*.pid

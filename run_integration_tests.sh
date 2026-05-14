@@ -60,7 +60,7 @@ echo " ready"
 # Run tests
 FAILED=0
 FAILED_TESTS=""
-TOTAL=9
+TOTAL=10
 PASSED=0
 
 run_test() {
@@ -105,6 +105,7 @@ run_test 6 "Async I/O tests" ./test_async_io
 run_test 7 "TradeZero config tests" ./test_tradezero_config
 run_test 8 "TradeZero client tests" ./test_tradezero_client
 run_test 9 "TradeZero WebSocket tests" ./test_tradezero_websocket
+run_test 10 "Toast notification tests" ./test_toast
 
 # Summary
 if [ $FAILED -eq 0 ]; then

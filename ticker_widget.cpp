@@ -570,9 +570,22 @@ void TickerWidget::render_order_entry(float width) {
     if (ImGui::Button("BUY", ImVec2(button_width, button_height))) {
         // Use manual price if entered, otherwise ask+offset
         float buy_price = (m_order_price > 0.0f) ? m_order_price : (m_best_ask + ORDER_OFFSET);
-        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && buy_price > 0.0f) {
+        if (m_order_mgr == nullptr) {
+            set_error("Order manager not configured");
+        } else if (m_symbol[0] == '\0') {
+            set_error("Enter a symbol first");
+        } else if (m_order_qty <= 0) {
+            set_error("Enter quantity");
+        } else if (buy_price <= 0.0f) {
+            set_error("Enter price (no ask data)");
+        } else {
             LOG_I("ticker", "BUY order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(buy_price));
-            m_order_mgr->buy(m_symbol, m_order_qty, buy_price);
+            int64_t result = m_order_mgr->buy(m_symbol, m_order_qty, buy_price);
+            if (result < 0) {
+                set_error(m_order_mgr->last_error());
+            } else {
+                clear_error();
+            }
         }
     }
 
@@ -587,9 +600,22 @@ void TickerWidget::render_order_entry(float width) {
     if (ImGui::Button("SELL", ImVec2(button_width, button_height))) {
         // Use manual price if entered, otherwise bid-offset
         float sell_price = (m_order_price > 0.0f) ? m_order_price : (m_best_bid - ORDER_OFFSET);
-        if (m_order_mgr != nullptr && m_symbol[0] != '\0' && m_order_qty > 0 && sell_price > 0.0f) {
+        if (m_order_mgr == nullptr) {
+            set_error("Order manager not configured");
+        } else if (m_symbol[0] == '\0') {
+            set_error("Enter a symbol first");
+        } else if (m_order_qty <= 0) {
+            set_error("Enter quantity");
+        } else if (sell_price <= 0.0f) {
+            set_error("Enter price (no bid data)");
+        } else {
             LOG_I("ticker", "SELL order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(sell_price));
-            m_order_mgr->sell(m_symbol, m_order_qty, sell_price);
+            int64_t result = m_order_mgr->sell(m_symbol, m_order_qty, sell_price);
+            if (result < 0) {
+                set_error(m_order_mgr->last_error());
+            } else {
+                clear_error();
+            }
         }
     }
 
