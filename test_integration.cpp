@@ -725,6 +725,36 @@ TEST(get_executions_empty_on_fresh_start) {
     (void)executions;
 }
 
+TEST(get_accounts_from_tradezero) {
+    // Test get_accounts() with mock server
+    TradeZeroClient client;
+    client.set_api_keys("test_key", "test_secret");
+    client.set_base_url("http://localhost:8080/v1/api");
+
+    ASSERT(client.has_api_keys());
+    ASSERT(!client.is_configured());  // No account yet
+
+    // Fetch accounts from mock server
+    std::vector<TZAccount> accounts = client.get_accounts();
+
+    // Mock server returns 2 accounts
+    ASSERT_EQ(accounts.size(), 2u);
+
+    // Verify first account
+    ASSERT_STREQ(accounts[0].account_id, "test");
+    ASSERT_STREQ(accounts[0].account_type, "Margin");
+    ASSERT_STREQ(accounts[0].status, "Active");
+
+    // Verify second account
+    ASSERT_STREQ(accounts[1].account_id, "demo");
+    ASSERT_STREQ(accounts[1].account_type, "Cash");
+    ASSERT_STREQ(accounts[1].status, "Active");
+
+    // Now select an account and verify client is configured
+    client.set_account_id(accounts[0].account_id);
+    ASSERT(client.is_configured());
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -772,6 +802,8 @@ int main(int argc, char* argv[]) {
     unlink(TEST_DB);
 
     run_get_executions_empty_on_fresh_start();
+
+    run_get_accounts_from_tradezero();
 
     // Cleanup
     cleanup_test_directory();

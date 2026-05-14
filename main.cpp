@@ -48,6 +48,19 @@ struct TZConfig {
     }
 };
 
+// Application state
+enum class AppState {
+    ACCOUNT_SELECTION,  // Show account selection screen
+    TRADING             // Normal trading interface
+};
+
+static AppState g_app_state = AppState::TRADING;  // Default to trading if no TZ config
+static std::vector<TZAccount> g_available_accounts;
+static int g_selected_account_index = -1;
+[[maybe_unused]] static bool g_accounts_loaded = false;
+static bool g_accounts_loading = false;
+static char g_account_error[256] = "";
+
 // TradeZero initialization thread (stored for proper cleanup)
 static std::thread g_tradezero_init_thread;
 
@@ -487,6 +500,185 @@ static void save_session() {
     g_order_manager.save_to_database();
 }
 
+// Render the application logo using ImGui drawing primitives
+static void render_logo(ImVec2 center, float size) {
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    // Colors (using make_color to avoid old-style cast warnings from IM_COL32)
+    ImU32 col_chart_green = make_color(0, 200, 80, 255);
+    ImU32 col_chart_red = make_color(200, 50, 50, 255);
+    ImU32 col_bg = make_color(30, 35, 45, 255);
+    ImU32 col_border = make_color(60, 70, 90, 255);
+
+    // Background circle
+    draw_list->AddCircleFilled(center, size, col_bg, 48);
+    draw_list->AddCircle(center, size, col_border, 48, 3.0f);
+
+    // Draw stylized candlestick chart inside the circle
+    float chart_left = center.x - size * 0.6f;
+    float chart_top = center.y - size * 0.5f;
+    float chart_bottom = center.y + size * 0.5f;
+
+    // Candle widths and spacing
+    float candle_width = size * 0.12f;
+    float spacing = size * 0.22f;
+
+    // Draw 5 candles representing an uptrend
+    struct CandleData { float open; float close; float high; float low; };
+    CandleData candles[] = {
+        {0.7f, 0.5f, 0.75f, 0.45f},  // Red (down)
+        {0.5f, 0.6f, 0.65f, 0.45f},  // Green (up)
+        {0.55f, 0.4f, 0.6f, 0.35f},  // Red (down)
+        {0.4f, 0.55f, 0.6f, 0.35f},  // Green (up)
+        {0.5f, 0.3f, 0.55f, 0.25f},  // Green (up) - big move up
+    };
+
+    for (int i = 0; i < 5; i++) {
+        float x = chart_left + spacing * 0.5f + static_cast<float>(i) * spacing;
+        float y_open = chart_top + candles[i].open * (chart_bottom - chart_top);
+        float y_close = chart_top + candles[i].close * (chart_bottom - chart_top);
+        float y_high = chart_top + candles[i].high * (chart_bottom - chart_top);
+        float y_low = chart_top + candles[i].low * (chart_bottom - chart_top);
+
+        bool is_green = y_close < y_open;  // Price went up (close is above open visually)
+        ImU32 candle_col = is_green ? col_chart_green : col_chart_red;
+
+        // Wick
+        draw_list->AddLine(ImVec2(x, y_high), ImVec2(x, y_low), candle_col, 2.0f);
+
+        // Body
+        float body_top = is_green ? y_close : y_open;
+        float body_bottom = is_green ? y_open : y_close;
+        draw_list->AddRectFilled(
+            ImVec2(x - candle_width / 2, body_top),
+            ImVec2(x + candle_width / 2, body_bottom),
+            candle_col
+        );
+    }
+}
+
+// Render account selection screen
+static void render_account_selection(const ImGuiIO& io) {
+    ImVec2 window_size = io.DisplaySize;
+    ImVec2 center(window_size.x / 2.0f, window_size.y / 2.0f);
+
+    // Full-screen dark background
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(window_size);
+    ImGui::Begin("AccountSelection", nullptr,
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    // Logo
+    float logo_size = 80.0f;
+    ImVec2 logo_center(center.x, center.y - 150.0f);
+    render_logo(logo_center, logo_size);
+
+    // App name
+    ImGui::SetCursorPos(ImVec2(0, center.y - 50.0f));
+    ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);  // Default font, but larger
+    const char* app_name = "uCharts";
+    float text_width = ImGui::CalcTextSize(app_name).x;
+    ImGui::SetCursorPosX((window_size.x - text_width) / 2.0f);
+    ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "%s", app_name);
+
+    const char* subtitle = "Professional Trading Platform";
+    float subtitle_width = ImGui::CalcTextSize(subtitle).x;
+    ImGui::SetCursorPosX((window_size.x - subtitle_width) / 2.0f);
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", subtitle);
+    ImGui::PopFont();
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+
+    // Account selection section
+    float panel_width = 400.0f;
+    float panel_x = (window_size.x - panel_width) / 2.0f;
+    ImGui::SetCursorPosX(panel_x);
+
+    if (g_accounts_loading) {
+        const char* loading_text = "Loading accounts...";
+        float loading_width = ImGui::CalcTextSize(loading_text).x;
+        ImGui::SetCursorPosX((window_size.x - loading_width) / 2.0f);
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", loading_text);
+    } else if (g_account_error[0] != '\0') {
+        ImGui::SetCursorPosX(panel_x);
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error: %s", g_account_error);
+    } else if (g_available_accounts.empty()) {
+        const char* no_accounts = "No accounts available";
+        float no_acc_width = ImGui::CalcTextSize(no_accounts).x;
+        ImGui::SetCursorPosX((window_size.x - no_acc_width) / 2.0f);
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", no_accounts);
+    } else {
+        // Section header
+        const char* select_header = "Select Trading Account";
+        float header_width = ImGui::CalcTextSize(select_header).x;
+        ImGui::SetCursorPosX((window_size.x - header_width) / 2.0f);
+        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", select_header);
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+
+        // Account buttons
+        for (size_t i = 0; i < g_available_accounts.size(); ++i) {
+            const TZAccount& acc = g_available_accounts[i];
+
+            ImGui::SetCursorPosX(panel_x);
+            ImGui::PushID(static_cast<int>(i));
+
+            // Create button label with account info
+            char button_label[128];
+            std::snprintf(button_label, sizeof(button_label), "%s (%s)",
+                         acc.account_id, acc.account_type);
+
+            // Highlight selected account
+            bool is_selected = (g_selected_account_index == static_cast<int>(i));
+            if (is_selected) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.5f, 0.25f, 1.0f));
+            }
+
+            if (ImGui::Button(button_label, ImVec2(panel_width, 30.0f))) {
+                g_selected_account_index = static_cast<int>(i);
+            }
+
+            if (is_selected) {
+                ImGui::PopStyleColor(2);
+            }
+
+            ImGui::PopID();
+            ImGui::Spacing();
+        }
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+
+        // Continue button (only enabled when account selected)
+        ImGui::SetCursorPosX(panel_x);
+        bool can_continue = (g_selected_account_index >= 0);
+        if (!can_continue) {
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
+        }
+
+        if (ImGui::Button("Continue", ImVec2(panel_width, 40.0f)) && can_continue) {
+            // User selected an account - transition to trading
+            // The actual connection will happen in the main loop when state changes
+            const TZAccount& selected = g_available_accounts[static_cast<size_t>(g_selected_account_index)];
+            LOG_I("tradezero", "Selected account: %s", selected.account_id);
+            g_app_state = AppState::TRADING;
+        }
+
+        if (!can_continue) {
+            ImGui::PopStyleVar();
+        }
+    }
+
+    ImGui::End();
+}
+
 static void glfw_error_callback(int error, const char* description) {
     // Always log GLFW errors regardless of verbose mode
     std::fprintf(stderr, "[GLFW] Error %d: %s\n", error, description);
@@ -562,28 +754,18 @@ int main(int argc, char** argv) {
 
     // Initialize TradeZero integration
     TZConfig tz_config;
+    static char s_tz_api_key[128];
+    static char s_tz_api_secret[128];
+
     if (load_tradezero_config("config.ini", tz_config) && tz_config.enabled) {
         LOG_I("tradezero", "Initializing TradeZero integration...");
 
-        // Configure REST client
-        get_tradezero_client().set_credentials(
-            tz_config.api_key_id,
-            tz_config.api_secret_key,
-            tz_config.account_id
-        );
+        // Store API keys for later use
+        std::strncpy(s_tz_api_key, tz_config.api_key_id, sizeof(s_tz_api_key) - 1);
+        std::strncpy(s_tz_api_secret, tz_config.api_secret_key, sizeof(s_tz_api_secret) - 1);
 
-        // Configure WebSocket clients
-        get_tradezero_pnl().set_credentials(
-            tz_config.api_key_id,
-            tz_config.api_secret_key,
-            tz_config.account_id
-        );
-
-        get_tradezero_portfolio().set_credentials(
-            tz_config.api_key_id,
-            tz_config.api_secret_key,
-            tz_config.account_id
-        );
+        // Set only API keys initially (no account yet)
+        get_tradezero_client().set_api_keys(tz_config.api_key_id, tz_config.api_secret_key);
 
         // Set TradeZero client in order manager
         g_order_manager.set_tradezero_client(&get_tradezero_client());
@@ -595,7 +777,7 @@ int main(int argc, char** argv) {
             get_toast_manager().error(msg);
         });
 
-        // Set WebSocket callbacks BEFORE connecting
+        // Set WebSocket callbacks (will be used after account selection)
         get_tradezero_pnl().set_pnl_snapshot_callback([](const TZPnLSnapshot& snapshot) {
             std::lock_guard<std::mutex> lock(g_tz_account_mutex);
             g_tz_account_info.equity = snapshot.account_value;
@@ -639,8 +821,45 @@ int main(int argc, char** argv) {
             }
         });
 
-        // Initialize in background thread (per TradeZero docs)
-        // Store thread for proper cleanup on exit
+        // Show account selection screen - fetch accounts in background
+        g_app_state = AppState::ACCOUNT_SELECTION;
+        g_accounts_loading = true;
+
+        // Fetch accounts in background thread
+        std::thread([]{
+            LOG_I("tradezero", "Fetching available accounts...");
+            g_available_accounts = get_tradezero_client().get_accounts();
+            g_accounts_loading = false;
+
+            if (g_available_accounts.empty()) {
+                std::strncpy(g_account_error, "No accounts found. Check API credentials.",
+                            sizeof(g_account_error) - 1);
+                LOG_E("tradezero", "No accounts returned from API");
+            } else {
+                LOG_I("tradezero", "Found %zu accounts", g_available_accounts.size());
+                // Auto-select if only one account
+                if (g_available_accounts.size() == 1) {
+                    g_selected_account_index = 0;
+                }
+            }
+        }).detach();
+    } else {
+        LOG_I("tradezero", "TradeZero integration disabled or not configured");
+    }
+
+    // Function to connect TradeZero after account selection
+    auto connect_tradezero = []() {
+        const TZAccount& selected = g_available_accounts[static_cast<size_t>(g_selected_account_index)];
+
+        // Configure all clients with selected account
+        get_tradezero_client().set_account_id(selected.account_id);
+
+        get_tradezero_pnl().set_credentials(s_tz_api_key, s_tz_api_secret, selected.account_id);
+        get_tradezero_portfolio().set_credentials(s_tz_api_key, s_tz_api_secret, selected.account_id);
+
+        LOG_I("tradezero", "Connecting with account: %s", selected.account_id);
+
+        // Connect in background thread
         g_tradezero_init_thread = std::thread([]{
             LOG_I("tradezero", "Connecting TradeZero WebSocket streams...");
 
@@ -673,9 +892,10 @@ int main(int argc, char** argv) {
 
             LOG_I("tradezero", "TradeZero connected successfully");
         });
-    } else {
-        LOG_I("tradezero", "TradeZero integration disabled or not configured");
-    }
+    };
+
+    // Track if we've started connection after account selection
+    bool tradezero_connection_started = false;
 
     constexpr auto TARGET_FRAME_TIME = std::chrono::milliseconds(16);  // ~60 FPS
 
@@ -769,6 +989,42 @@ int main(int argc, char** argv) {
 
         // Update charts for selected ticker
         update_charts_for_selected_ticker();
+
+        // Handle app state transitions
+        if (g_app_state == AppState::ACCOUNT_SELECTION) {
+            // Render account selection screen
+            render_account_selection(io);
+
+            // Render toast notifications (on top of everything)
+            get_toast_manager().render();
+
+            ImGui::Render();
+            int display_w = 0;
+            int display_h = 0;
+            glfwGetFramebufferSize(window, &display_w, &display_h);
+            glViewport(0, 0, display_w, display_h);
+            glClearColor(0.06f, 0.06f, 0.08f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+            glfwSwapBuffers(window);
+
+            // Frame rate limiting for account selection screen
+            auto frame_end = std::chrono::steady_clock::now();
+            auto frame_duration = frame_end - frame_start;
+            if (frame_duration < TARGET_FRAME_TIME) {
+                auto sleep_ms = std::chrono::duration_cast<std::chrono::milliseconds>(TARGET_FRAME_TIME - frame_duration).count();
+                if (sleep_ms > 0) {
+                    safe_sleep_ms(static_cast<int>(sleep_ms));
+                }
+            }
+            continue;  // Skip trading UI rendering
+        }
+
+        // Handle transition from account selection to trading
+        if (!tradezero_connection_started && g_selected_account_index >= 0 && !g_available_accounts.empty()) {
+            tradezero_connection_started = true;
+            connect_tradezero();
+        }
 
         // Main window
         ImGui::SetNextWindowPos(ImVec2(0, 0));

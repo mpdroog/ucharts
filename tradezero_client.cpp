@@ -62,6 +62,21 @@ void TradeZeroClient::set_credentials(const char* api_key_id, const char* api_se
     m_account_id[sizeof(m_account_id) - 1] = '\0';
 }
 
+void TradeZeroClient::set_api_keys(const char* api_key_id, const char* api_secret_key) {
+    std::strncpy(m_api_key_id, api_key_id, sizeof(m_api_key_id) - 1);
+    m_api_key_id[sizeof(m_api_key_id) - 1] = '\0';
+
+    std::strncpy(m_api_secret_key, api_secret_key, sizeof(m_api_secret_key) - 1);
+    m_api_secret_key[sizeof(m_api_secret_key) - 1] = '\0';
+
+    m_account_id[0] = '\0';  // Clear account until selected
+}
+
+void TradeZeroClient::set_account_id(const char* account_id) {
+    std::strncpy(m_account_id, account_id, sizeof(m_account_id) - 1);
+    m_account_id[sizeof(m_account_id) - 1] = '\0';
+}
+
 void TradeZeroClient::set_base_url(const char* url) {
     if (url != nullptr) {
         std::strncpy(m_base_url, url, sizeof(m_base_url) - 1);
@@ -73,6 +88,10 @@ void TradeZeroClient::set_base_url(const char* url) {
 
 bool TradeZeroClient::is_configured() const {
     return m_api_key_id[0] != '\0' && m_api_secret_key[0] != '\0' && m_account_id[0] != '\0';
+}
+
+bool TradeZeroClient::has_api_keys() const {
+    return m_api_key_id[0] != '\0' && m_api_secret_key[0] != '\0';
 }
 
 std::string TradeZeroClient::build_url(const char* endpoint) const {
@@ -95,12 +114,20 @@ std::string TradeZeroClient::build_url(const char* endpoint) const {
 TZResponse TradeZeroClient::make_request(const char* method, const char* endpoint, const char* body) {
     TZResponse response;
 
+    // Most requests need full configuration (API keys + account)
+    // get_accounts() uses make_request_with_keys_only() which only needs API keys
     if (!is_configured()) {
         std::snprintf(m_error, sizeof(m_error), "TradeZero client not configured");
         response.error = m_error;
         LOG_E("tradezero", "%s", m_error);
         return response;
     }
+
+    return make_request_internal(method, endpoint, body);
+}
+
+TZResponse TradeZeroClient::make_request_internal(const char* method, const char* endpoint, const char* body) {
+    TZResponse response;
 
     CURL* curl = curl_easy_init();
     if (curl == nullptr) {
@@ -217,6 +244,73 @@ TZResponse TradeZeroClient::make_request(const char* method, const char* endpoin
     curl_easy_cleanup(curl);
 
     return response;
+}
+
+std::vector<TZAccount> TradeZeroClient::get_accounts() {
+    std::vector<TZAccount> accounts;
+
+    // Only need API keys for this endpoint (no account_id required)
+    if (!has_api_keys()) {
+        LOG_E("tradezero", "API keys not configured");
+        return accounts;
+    }
+
+    TZResponse resp = make_request_internal("GET", "/accounts", nullptr);
+    if (!resp.success) {
+        LOG_W("tradezero", "Failed to fetch accounts: HTTP %d", resp.status_code);
+        return accounts;
+    }
+
+    try {
+        auto j = json::parse(resp.body);
+
+        // Production API returns: {"accounts": [{"account": ..., "accountStatus": ...}, ...]}
+        if (!j.is_object() || !j.contains("accounts") || !j["accounts"].is_array()) {
+            LOG_E("tradezero", "Accounts response missing 'accounts' array: %.200s", resp.body.c_str());
+            return accounts;
+        }
+
+        for (const auto& acc_json : j["accounts"]) {
+            TZAccount account;
+
+            // Log raw JSON keys for debugging
+            LOG_D("tradezero", "Account JSON keys:");
+            for (auto& [key, val] : acc_json.items()) {
+                LOG_D("tradezero", "  key: %s", key.c_str());
+            }
+
+            if (acc_json.contains("account") && acc_json["account"].is_string()) {
+                std::string id = acc_json["account"].get<std::string>();
+                std::strncpy(account.account_id, id.c_str(), sizeof(account.account_id) - 1);
+                account.account_id[sizeof(account.account_id) - 1] = '\0';
+            }
+
+            if (acc_json.contains("accountType") && acc_json["accountType"].is_string()) {
+                std::string type = acc_json["accountType"].get<std::string>();
+                std::strncpy(account.account_type, type.c_str(), sizeof(account.account_type) - 1);
+                account.account_type[sizeof(account.account_type) - 1] = '\0';
+            }
+
+            if (acc_json.contains("accountStatus") && acc_json["accountStatus"].is_string()) {
+                std::string status = acc_json["accountStatus"].get<std::string>();
+                std::strncpy(account.status, status.c_str(), sizeof(account.status) - 1);
+                account.status[sizeof(account.status) - 1] = '\0';
+            }
+
+            LOG_I("tradezero", "Parsed account: id='%s' type='%s' status='%s'",
+                  account.account_id, account.account_type, account.status);
+            if (account.account_id[0] != '\0') {
+                accounts.push_back(account);
+            }
+        }
+
+        LOG_I("tradezero", "Fetched %zu accounts", accounts.size());
+
+    } catch (const json::exception& e) {
+        LOG_E("tradezero", "Accounts JSON parse failed: %s (body: %.200s)", e.what(), resp.body.c_str());
+    }
+
+    return accounts;
 }
 
 std::vector<Position> TradeZeroClient::get_positions() {

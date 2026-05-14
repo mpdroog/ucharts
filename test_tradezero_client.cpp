@@ -49,6 +49,48 @@ TEST(client_get_executions_returns_vector) {
     (void)executions;
 }
 
+TEST(client_api_keys_only) {
+    TradeZeroClient client;
+
+    ASSERT_TRUE(!client.has_api_keys());
+    ASSERT_TRUE(!client.is_configured());
+
+    client.set_api_keys("test_key_id", "test_secret_key");
+
+    ASSERT_TRUE(client.has_api_keys());
+    ASSERT_TRUE(!client.is_configured());  // Still not configured (no account)
+}
+
+TEST(client_set_account_after_keys) {
+    TradeZeroClient client;
+
+    client.set_api_keys("test_key_id", "test_secret_key");
+    ASSERT_TRUE(!client.is_configured());
+
+    client.set_account_id("test_account");
+    ASSERT_TRUE(client.is_configured());
+}
+
+TEST(client_get_accounts_returns_vector) {
+    // This test verifies the get_accounts() method exists and returns a vector
+    // Full integration test with mock server is in test_integration.cpp
+    TradeZeroClient client;
+    client.set_api_keys("test_key", "test_secret");
+    client.set_base_url("http://localhost:8080/v1/api");
+
+    // Call get_accounts - should return accounts from mock server
+    std::vector<TZAccount> accounts = client.get_accounts();
+    // No assertion here - mock server may or may not be running
+    (void)accounts;
+}
+
+TEST(tzaccount_struct_initialization) {
+    TZAccount account;
+    ASSERT_TRUE(account.account_id[0] == '\0');
+    ASSERT_TRUE(account.account_type[0] == '\0');
+    ASSERT_TRUE(account.status[0] == '\0');
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -59,6 +101,10 @@ int main(int argc, char* argv[]) {
     RUN_TEST(client_initialization);
     RUN_TEST(client_base_url_override);
     RUN_TEST(client_get_executions_returns_vector);
+    RUN_TEST(client_api_keys_only);
+    RUN_TEST(client_set_account_after_keys);
+    RUN_TEST(client_get_accounts_returns_vector);
+    RUN_TEST(tzaccount_struct_initialization);
 
     test_summary();
     return 0;

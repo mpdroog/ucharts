@@ -79,6 +79,37 @@ func logError(format string, args ...interface{}) {
 
 // REST API Handlers
 
+func handleAccounts(w http.ResponseWriter, r *http.Request) {
+	logInfo("REST: GET %s", r.URL.Path)
+	w.Header().Set("Content-Type", "application/json")
+	// Return mock accounts list - matches actual TradeZero API format
+	// Production API returns: account, accountStatus, accountType, availableCash, buyingPower, etc.
+	// Note: Production API does NOT return accountName field
+	response := map[string]interface{}{
+		"accounts": []map[string]interface{}{
+			{
+				"account":       "test",
+				"accountType":   "Margin",
+				"accountStatus": "Active",
+			},
+			{
+				"account":       "demo",
+				"accountType":   "Cash",
+				"accountStatus": "Active",
+			},
+		},
+	}
+	data, err := json.Marshal(response)
+	if err != nil {
+		logError("REST: Failed to marshal accounts: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := w.Write(data); err != nil {
+		logError("REST: Failed to write accounts response: %v", err)
+	}
+}
+
 func handlePositions(w http.ResponseWriter, r *http.Request) {
 	logInfo("REST: GET %s", r.URL.Path)
 	w.Header().Set("Content-Type", "application/json")
@@ -678,7 +709,8 @@ func main() {
 
 	// HTTP REST API server
 	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/v1/api/reset", handleReset) // Test endpoint to clear state
+	httpMux.HandleFunc("/v1/api/reset", handleReset)    // Test endpoint to clear state
+	httpMux.HandleFunc("/v1/api/accounts", handleAccounts) // List all accounts (exact match)
 	httpMux.HandleFunc("/v1/api/accounts/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.HasSuffix(path, "/positions") {

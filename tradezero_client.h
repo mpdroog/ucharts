@@ -16,6 +16,19 @@ struct TZResponse {
     TZResponse() : status_code(0), success(false) {}
 };
 
+// TradeZero account info (from GET /accounts)
+struct TZAccount {
+    char account_id[32];
+    char account_type[16];  // "Live", "Demo", etc.
+    char status[16];        // "Active", "Restricted"
+
+    TZAccount() {
+        account_id[0] = '\0';
+        account_type[0] = '\0';
+        status[0] = '\0';
+    }
+};
+
 // TradeZero REST API client
 // Purpose: Order placement/cancellation and initial data sync
 // Account data comes from P&L WebSocket stream
@@ -26,8 +39,14 @@ public:
 
     // Configuration
     void set_credentials(const char* api_key_id, const char* api_secret_key, const char* account_id);
+    void set_api_keys(const char* api_key_id, const char* api_secret_key);  // Set only API keys (before account selection)
+    void set_account_id(const char* account_id);  // Set account after selection
     void set_base_url(const char* url);  // Override API base URL (for testing with mock server)
     bool is_configured() const;
+    bool has_api_keys() const;  // Check if API keys are set (but maybe no account yet)
+
+    // Account discovery
+    std::vector<TZAccount> get_accounts();  // Get all accounts for API credentials
 
     // Initial data sync (before WebSocket subscription)
     // Returns parsed data directly; empty vector on failure (errors logged internally)
@@ -57,6 +76,7 @@ private:
 
     // Make HTTP request with authentication headers
     TZResponse make_request(const char* method, const char* endpoint, const char* body = nullptr);
+    TZResponse make_request_internal(const char* method, const char* endpoint, const char* body = nullptr);
 };
 
 // Global TradeZero client instance
