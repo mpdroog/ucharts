@@ -2,6 +2,7 @@
 #include "order_manager.h"
 #include "tradezero_client.h"
 #include "tradezero_websocket.h"
+#include "toast.h"
 #include "logger.h"
 #include <cstring>
 #include <ctime>
@@ -292,10 +293,26 @@ bool OrderManager::cancel_all_orders(const char* symbol) {
         TZResponse resp = m_tradezero_client->cancel_all_orders();
         if (!resp.success) {
             LOG_E("orders", "TradeZero cancel all failed: %s", resp.error.c_str());
+            get_toast_manager().error(resp.error.c_str());
             return false;
         }
 
-        LOG_I("orders", "Cancel all orders requested via TradeZero");
+        // Parse response for message and show toast
+        try {
+            auto j = json::parse(resp.body);
+            if (j.contains("message") && j["message"].is_string()) {
+                std::string msg = j["message"].get<std::string>();
+                get_toast_manager().success(msg.c_str());
+                LOG_I("orders", "Cancel all orders: %s", msg.c_str());
+            } else {
+                get_toast_manager().success("All orders canceled");
+                LOG_I("orders", "Cancel all orders requested via TradeZero");
+            }
+        } catch (const json::exception& e) {
+            LOG_E("orders", "Failed to parse cancel all response: %s", e.what());
+            get_toast_manager().error("Cancel all: unexpected response");
+        }
+
         // WebSocket will confirm cancellations
         return true;
     } else {
