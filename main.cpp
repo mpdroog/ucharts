@@ -23,7 +23,6 @@
 #include "logger.h"
 #include "sr_calculator.h"
 #include "signal_detector.h"
-#include "signal_backtester.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -201,12 +200,9 @@ struct SymbolState {
     // Signal detection state
     std::vector<SRLevel> sr_levels;           // Multi-timeframe S/R
     std::vector<EntrySignal> entry_signals;   // Detected signals (kept for display)
-    SymbolSignalPreference signal_pref;       // Backtesting results
     size_t last_candle_count_1m;              // Track new candles for signal detection
-    bool backtest_pending;                    // True if backtest queued
-    bool backtest_complete;                   // True when backtest results ready
 
-    SymbolState() : last_candle_count_1m(0), backtest_pending(false), backtest_complete(false) {
+    SymbolState() : last_candle_count_1m(0) {
         symbol[0] = '\0';
         // Zoom out on intraday charts by default
         view_1m.zoom = 6.0f;   // ~33 candles visible (half hour)
@@ -223,157 +219,6 @@ static std::mutex g_symbol_states_mutex;
 static SRCalculator g_sr_calculator;
 static SignalDetector g_signal_detector;
 static const int MAX_DISPLAYED_SIGNALS = 10;  // Keep last N signals on chart
-
-// Background backtesting state
-struct BacktestRequest {
-    int ticker_idx;
-    char symbol[MAX_SYMBOL_LEN];
-    std::vector<Candle> candles_1m;
-    std::vector<Candle> candles_5m;
-    std::vector<Candle> candles_daily;
-};
-struct BacktestResult {
-    int ticker_idx;
-    char symbol[MAX_SYMBOL_LEN];
-    SymbolSignalPreference pref;
-    std::vector<SRLevel> sr_levels;
-    bool valid;
-};
-static std::mutex g_backtest_mutex;
-static std::vector<BacktestRequest> g_backtest_queue;
-static std::vector<BacktestResult> g_backtest_results;
-static std::thread g_backtest_thread;
-static bool g_backtest_running = false;
-
-// Background backtest worker - processes requests without blocking UI
-static void backtest_worker() {
-    SignalBacktester backtester;
-    backtester.set_min_rr(3.0f);
-
-    while (g_backtest_running) {
-        BacktestRequest req;
-        bool has_work = false;
-
-        // Check for work
-        {
-            std::lock_guard<std::mutex> lock(g_backtest_mutex);
-            if (!g_backtest_queue.empty()) {
-                req = std::move(g_backtest_queue.front());
-                g_backtest_queue.erase(g_backtest_queue.begin());
-                has_work = true;
-            }
-        }
-
-        if (has_work) {
-            LOG_D("signal", "Backtesting %s (%zu 1m, %zu 5m, %zu daily candles)",
-                  req.symbol, req.candles_1m.size(), req.candles_5m.size(), req.candles_daily.size());
-
-            // Run backtest (this is the slow part - ~100-500ms)
-            BacktestResult result;
-            result.ticker_idx = req.ticker_idx;
-            safe_strcpy(result.symbol, req.symbol, sizeof(result.symbol));
-            result.pref = backtester.analyze_symbol(req.symbol, req.candles_1m, req.candles_5m, req.candles_daily);
-
-            // Calculate S/R levels for this symbol
-            float current_price = req.candles_1m.empty() ? 0.0f : req.candles_1m.back().close;
-            SRCalculator sr_calc;
-            result.sr_levels = sr_calc.calculate_levels(req.candles_daily, req.candles_5m, current_price, 5);
-            result.valid = true;
-
-            LOG_D("signal", "Backtest complete for %s: best=%s score=%.2f",
-                  req.symbol,
-                  result.pref.best_signal_type != SignalType::NONE ?
-                      (result.pref.best_signal_type == SignalType::BREAKOUT ? "BREAKOUT" :
-                       result.pref.best_signal_type == SignalType::BOUNCE ? "BOUNCE" :
-                       result.pref.best_signal_type == SignalType::VWAP_CROSS ? "VWAP" : "MA") : "NONE",
-                  static_cast<double>(result.pref.best_score));
-
-            // Queue result for main thread
-            {
-                std::lock_guard<std::mutex> lock(g_backtest_mutex);
-                g_backtest_results.push_back(std::move(result));
-            }
-        } else {
-            // No work, sleep briefly
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    }
-}
-
-// Queue a symbol for background backtesting
-static void queue_backtest(int ticker_idx, const char* symbol) {
-    // Get candle data (copies for thread safety)
-    std::vector<Candle> candles_1m, candles_5m, candles_daily;
-    (void)get_market_data().get_candles(symbol, Timeframe::M1, candles_1m, MAX_BACKTEST_CANDLES);
-    (void)get_market_data().get_candles(symbol, Timeframe::M5, candles_5m, MAX_BACKTEST_CANDLES);
-    (void)get_market_data().get_candles(symbol, Timeframe::DAILY, candles_daily, MAX_CANDLES);
-
-    // Need minimum data
-    if (candles_1m.size() < 100) {
-        LOG_D("signal", "Not enough 1m candles for %s (%zu), skipping backtest", symbol, candles_1m.size());
-        return;
-    }
-
-    BacktestRequest req;
-    req.ticker_idx = ticker_idx;
-    safe_strcpy(req.symbol, symbol, sizeof(req.symbol));
-    req.candles_1m = std::move(candles_1m);
-    req.candles_5m = std::move(candles_5m);
-    req.candles_daily = std::move(candles_daily);
-
-    {
-        std::lock_guard<std::mutex> lock(g_backtest_mutex);
-        // Remove any existing request for this ticker
-        g_backtest_queue.erase(
-            std::remove_if(g_backtest_queue.begin(), g_backtest_queue.end(),
-                           [ticker_idx](const BacktestRequest& r) { return r.ticker_idx == ticker_idx; }),
-            g_backtest_queue.end());
-        g_backtest_queue.push_back(std::move(req));
-    }
-
-    g_symbol_states[ticker_idx].backtest_pending = true;
-    LOG_D("signal", "Queued backtest for %s (ticker %d)", symbol, ticker_idx);
-}
-
-// Process completed backtest results (called from main thread)
-static void process_backtest_results() {
-    std::vector<BacktestResult> results;
-    {
-        std::lock_guard<std::mutex> lock(g_backtest_mutex);
-        results = std::move(g_backtest_results);
-        g_backtest_results.clear();
-    }
-
-    for (auto& result : results) {
-        if (!result.valid) continue;
-        if (result.ticker_idx < 0 || result.ticker_idx >= NUM_TICKERS) continue;
-
-        SymbolState& state = g_symbol_states[result.ticker_idx];
-
-        // Only apply if symbol still matches
-        if (std::strcmp(state.symbol, result.symbol) != 0) continue;
-
-        state.signal_pref = result.pref;
-        state.sr_levels = std::move(result.sr_levels);
-        state.backtest_pending = false;
-        state.backtest_complete = true;
-
-        // Save to database for persistence
-        get_database().save_signal_preference(result.pref);
-
-        // Show toast with best signal type
-        if (result.pref.best_signal_type != SignalType::NONE) {
-            char msg[128];
-            const char* type_name = result.pref.best_signal_type == SignalType::BREAKOUT ? "BREAKOUT" :
-                                    result.pref.best_signal_type == SignalType::BOUNCE ? "BOUNCE" :
-                                    result.pref.best_signal_type == SignalType::VWAP_CROSS ? "VWAP" : "MA";
-            std::snprintf(msg, sizeof(msg), "%s: Best signal is %s (%.0f%% win)",
-                         result.symbol, type_name,
-                         static_cast<double>(result.pref.get_score(result.pref.best_signal_type).win_rate * 100.0f));
-            get_toast_manager().info(msg, 5000);
-        }
-    }
-}
 
 // Undo/redo for drawings
 struct DrawingSnapshot {
@@ -423,23 +268,52 @@ static ChartDrawMode g_draw_mode = ChartDrawMode::NONE;
 static int g_current_color_idx = 0;
 static LineStyle g_current_style = LineStyle::SOLID;
 
-// Get current NYC time string
-static void get_nyc_time(char* buf, size_t buf_size) {
+// Market state for clock background coloring
+enum class MarketState {
+    CLOSED,         // Before 09:00 or after market close
+    PRE_OPEN_YELLOW, // 09:00 - 09:15 (30-15 min before open)
+    PRE_OPEN_RED,   // 09:15 - 09:30 (15 min to open - warning)
+    OPEN            // 09:30+ market open
+};
+
+// Track pre-market warning toast (show once per minute)
+static int g_last_warning_minute = -1;
+
+// Get current NYC time string and market state
+static MarketState get_nyc_time(char* buf, size_t buf_size, int* out_hour = nullptr, int* out_min = nullptr) {
     time_t now = time(nullptr);
 
     // Get UTC time
     struct tm* utc = gmtime(&now);
     if (utc == nullptr) {
         snprintf(buf, buf_size, "--:--:--");
-        return;
+        return MarketState::CLOSED;
     }
 
     // Convert to NYC (EST = UTC-5, EDT = UTC-4)
     // Simplified: assume EDT (UTC-4) from March to November
     int hour = utc->tm_hour - 4;
     if (hour < 0) hour += 24;
+    int min = utc->tm_min;
 
-    snprintf(buf, buf_size, "%02d:%02d:%02d (NYSE)", hour, utc->tm_min, utc->tm_sec);
+    snprintf(buf, buf_size, "%02d:%02d:%02d (NYSE)", hour, min, utc->tm_sec);
+
+    if (out_hour) *out_hour = hour;
+    if (out_min) *out_min = min;
+
+    // Determine market state based on time
+    // Market opens at 09:30 ET
+    if (hour < 9) {
+        return MarketState::CLOSED;
+    } else if (hour == 9 && min < 15) {
+        return MarketState::PRE_OPEN_YELLOW;  // 09:00 - 09:14
+    } else if (hour == 9 && min < 30) {
+        return MarketState::PRE_OPEN_RED;     // 09:15 - 09:29
+    } else if (hour < 16) {
+        return MarketState::OPEN;             // 09:30 - 15:59
+    } else {
+        return MarketState::CLOSED;           // 16:00+
+    }
 }
 
 // Forward declaration
@@ -632,17 +506,11 @@ static void update_charts_for_selected_ticker() {
     g_chart_5m.set_current_price(current_price);
     g_chart_daily.set_current_price(current_price);
 
-    // Trigger backtest when enough data is available and not yet backtested
-    if (!state.backtest_pending && !state.backtest_complete && candles_1m.size() >= 100) {
-        // Try to load from database first
-        SymbolSignalPreference saved_pref;
-        if (get_database().load_signal_preference(symbol, saved_pref)) {
-            state.signal_pref = saved_pref;
-            state.backtest_complete = true;
-            LOG_D("signal", "Loaded signal preference for %s from database", symbol);
-        } else {
-            // Queue for background backtesting
-            queue_backtest(g_selected_ticker, symbol);
+    // Calculate S/R levels inline if not yet available (fast, ~1ms)
+    if (state.sr_levels.empty() && (!candles_daily.empty() || candles_5m.size() >= 20)) {
+        state.sr_levels = g_sr_calculator.calculate_levels(candles_daily, candles_5m, current_price, 5);
+        if (!state.sr_levels.empty()) {
+            LOG_D("signal", "Calculated %zu S/R levels for %s", state.sr_levels.size(), symbol);
         }
     }
 
@@ -659,24 +527,21 @@ static void update_charts_for_selected_ticker() {
     g_chart_5m.set_draw_style(g_current_style);
     g_chart_daily.set_draw_style(g_current_style);
 
-    // Signal detection - only run when backtesting is complete and we have S/R levels
-    if (state.backtest_complete && !state.sr_levels.empty() && !candles_1m.empty()) {
-        // Check if new candles arrived (detect on the most recent candle only)
+    // Signal detection - detect 5-min resistance breakouts on 1-min chart
+    if (!candles_1m.empty() && (!candles_daily.empty() || candles_5m.size() >= 20)) {
         size_t current_count = candles_1m.size();
-        if (current_count > state.last_candle_count_1m) {
-            // Get VWAP and MA values for signal detection
-            // Note: chart_widget calculates these internally, but we need them here
-            // For now, pass empty vectors - signal detector will skip VWAP/MA signals
-            std::vector<float> vwap_values;  // TODO: expose from chart_widget
-            std::vector<float> ma_values;    // TODO: expose from chart_widget
 
-            // Detect signal at the latest completed candle (second to last)
+        if (current_count > state.last_candle_count_1m) {
+            // Detect breakout at the latest completed candle (second to last)
             int detect_idx = static_cast<int>(current_count) - 2;
-            if (detect_idx >= 0) {
-                SignalType preferred = state.signal_pref.best_signal_type;
-                EntrySignal signal = g_signal_detector.detect_signal(
-                    candles_1m, state.sr_levels, vwap_values, ma_values,
-                    preferred, detect_idx
+            if (detect_idx >= 20) {  // Need volume history
+                // Calculate S/R at PREVIOUS candle's price so resistance is still above
+                float prev_price = candles_1m[static_cast<size_t>(detect_idx - 1)].close;
+                std::vector<SRLevel> sr_at_prev = g_sr_calculator.calculate_levels(
+                    candles_daily, candles_5m, prev_price, 10);
+
+                EntrySignal signal = g_signal_detector.detect_breakout(
+                    candles_1m, sr_at_prev, detect_idx
                 );
 
                 if (signal.is_valid) {
@@ -687,18 +552,21 @@ static void update_charts_for_selected_ticker() {
                     }
 
                     // Show toast notification
-                    char msg[128];
-                    std::snprintf(msg, sizeof(msg), "%s: %s %s @ $%.2f (R:R %.1f)",
-                                 symbol, signal.direction_name(), signal.type_name(),
-                                 static_cast<double>(signal.entry_price),
-                                 static_cast<double>(signal.risk_reward));
+                    char msg[256];
+                    std::snprintf(msg, sizeof(msg),
+                        "%s: BREAKOUT $%.2f -> $%.2f (R:R %.1f, vol %.1fx)",
+                        symbol,
+                        static_cast<double>(signal.broken_level),
+                        static_cast<double>(signal.entry_price),
+                        static_cast<double>(signal.risk_reward),
+                        static_cast<double>(signal.volume_ratio));
                     get_toast_manager().success(msg, 8000);
                     LOG_I("signal", "%s", msg);
                 }
             }
-
-            state.last_candle_count_1m = current_count;
         }
+
+        state.last_candle_count_1m = current_count;
     }
 
     // Connect signals and S/R levels to chart widgets
@@ -1020,11 +888,6 @@ int main(int argc, char** argv) {
     // Load session
     load_session();
 
-    // Start background backtest thread
-    g_backtest_running = true;
-    g_backtest_thread = std::thread(backtest_worker);
-    LOG_I("signal", "Background backtest thread started");
-
     // Set first ticker as selected by default
     g_ticker_widgets[0].set_selected(true);
     g_selected_ticker = 0;
@@ -1285,9 +1148,6 @@ int main(int argc, char** argv) {
         // Update charts for selected ticker
         update_charts_for_selected_ticker();
 
-        // Process completed backtest results from background thread
-        process_backtest_results();
-
         // Handle app state transitions
         if (g_app_state == AppState::ACCOUNT_SELECTION) {
             // Render account selection screen
@@ -1364,13 +1224,62 @@ int main(int argc, char** argv) {
         ImGui::TextColored(tz_pnl_ok ? col_green : col_red, "P&L");
         ImGui::SameLine();
 
-        // Clock (centered)
+        // Clock (centered) with market state background color
         char time_str[32];
-        get_nyc_time(time_str, sizeof(time_str));
+        int nyc_hour = 0, nyc_min = 0;
+        MarketState market_state = get_nyc_time(time_str, sizeof(time_str), &nyc_hour, &nyc_min);
 
         float text_width = ImGui::CalcTextSize(time_str).x;
-        ImGui::SetCursorPosX((window_width - text_width) / 2.0f);
+        float clock_x = (window_width - text_width) / 2.0f;
+        ImGui::SetCursorPosX(clock_x);
+
+        // Set background color based on market state
+        ImU32 bg_color = 0;
+        switch (market_state) {
+            case MarketState::PRE_OPEN_YELLOW:
+                bg_color = make_color(180, 180, 0, 255);  // Yellow
+                break;
+            case MarketState::PRE_OPEN_RED:
+                bg_color = make_color(180, 0, 0, 255);    // Red
+                break;
+            case MarketState::OPEN:
+                bg_color = make_color(0, 120, 0, 255);    // Green
+                break;
+            case MarketState::CLOSED:
+                bg_color = 0;  // No background
+                break;
+        }
+
+        if (bg_color != 0) {
+            ImVec2 text_pos = ImGui::GetCursorScreenPos();
+            ImVec2 text_size = ImGui::CalcTextSize(time_str);
+            float padding = 4.0f;
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(text_pos.x - padding, text_pos.y - 1),
+                ImVec2(text_pos.x + text_size.x + padding, text_pos.y + text_size.y + 1),
+                bg_color,
+                3.0f  // Rounded corners
+            );
+        }
         ImGui::Text("%s", time_str);
+
+        // Pre-market warning: show toast if open orders exist in last 5 min before market open
+        if (market_state == MarketState::PRE_OPEN_RED && nyc_min >= 25) {
+            // Check once per minute
+            if (g_last_warning_minute != nyc_min) {
+                g_last_warning_minute = nyc_min;
+                std::vector<Order> pending = get_order_manager().get_pending_orders();
+                if (!pending.empty()) {
+                    char warn_msg[128];
+                    snprintf(warn_msg, sizeof(warn_msg), "WARNING: %zu open order(s) - market opens in %d min!",
+                             pending.size(), 30 - nyc_min);
+                    get_toast_manager().warning(warn_msg);
+                }
+            }
+        } else {
+            // Reset warning state when outside the warning window
+            g_last_warning_minute = -1;
+        }
 
         // Account info (right-aligned) - only show if TradeZero P&L stream is connected
         if (tz_pnl_ok) {
@@ -1745,13 +1654,6 @@ int main(int argc, char** argv) {
             }
         }
     }
-
-    // Stop background backtest thread
-    g_backtest_running = false;
-    if (g_backtest_thread.joinable()) {
-        g_backtest_thread.join();
-    }
-    LOG_I("signal", "Background backtest thread stopped");
 
     // Save session before exit
     save_session();

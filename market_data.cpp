@@ -918,6 +918,7 @@ bool MarketData::load_symbol_from_tcp(const char* symbol) {
     bool need_daily = true;
     bool need_1m = true;
     bool need_5m = true;
+    bool already_complete = false;
 
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -934,9 +935,9 @@ bool MarketData::load_symbol_from_tcp(const char* symbol) {
             need_1m = data.candles_1m.empty();
             need_5m = data.candles_5m.empty();
 
-            // If we have all data, nothing to do
+            // If we have all data, mark for re-subscribe after lock release
             if (!need_daily && !need_1m && !need_5m) {
-                return true;
+                already_complete = true;
             }
 
             // Retry missing timeframes
@@ -957,6 +958,14 @@ bool MarketData::load_symbol_from_tcp(const char* symbol) {
         data.loading_state = LoadingState::PENDING;
         data.pending_requests = (need_daily ? 1 : 0) + (need_1m ? 1 : 0) + (need_5m ? 1 : 0);
         data.load_error[0] = '\0';
+    }
+
+    // Re-subscribe to L1/L2 if symbol was already fully loaded (may have been unwatched)
+    if (already_complete) {
+        if (!subscribe_quotes(symbol)) {
+            LOG_W("market", "Failed to re-subscribe to quotes for %s", symbol);
+        }
+        return true;
     }
 
     // Get lookup client and set up callback (connects on first use)
@@ -986,10 +995,12 @@ bool MarketData::load_symbol_from_tcp(const char* symbol) {
         lookup.fetch_daily(symbol, MAX_CANDLES, nullptr);
     }
     if (need_1m) {
-        lookup.fetch_interval(symbol, 60, MAX_CANDLES, nullptr);
+        // Fetch extended history for signal backtesting (~4 trading days)
+        lookup.fetch_interval(symbol, 60, MAX_BACKTEST_CANDLES, nullptr);
     }
     if (need_5m) {
-        lookup.fetch_interval(symbol, 300, MAX_CANDLES, nullptr);
+        // Also fetch extended 5-min history for S/R calculation
+        lookup.fetch_interval(symbol, 300, MAX_BACKTEST_CANDLES, nullptr);
     }
 
     // Note: L1/L2 subscription happens in on_lookup_result when data arrives
