@@ -247,6 +247,108 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price, const 
     }
 }
 
+int64_t OrderManager::sell_market(const char* symbol, int quantity, const char* route) {
+    if (symbol == nullptr || symbol[0] == '\0' || quantity <= 0) {
+        return -1;
+    }
+
+    MutexLock lock(m_mutex);
+
+    // Check if we have enough position to sell
+    Position* pos = find_position_locked(symbol);
+    if (pos == nullptr || pos->quantity < quantity) {
+        LOG_W("orders", "SELL MARKET rejected: %s qty=%d - insufficient position", symbol, quantity);
+        return -1;  // Not enough shares to sell
+    }
+
+    // Place order via TradeZero REST API
+    if (m_tradezero_client != nullptr && m_tradezero_client->is_configured()) {
+        // Create local pending order FIRST with temporary client_order_id
+        Order order;
+        order.id = m_next_order_id++;
+        safe_strcpy(order.symbol, symbol, sizeof(order.symbol));
+        std::snprintf(order.client_order_id, sizeof(order.client_order_id), "PENDING_SELL_%lld",
+                     static_cast<long long>(order.id));
+        order.side = OrderSide::SELL;
+        order.quantity = quantity;
+        order.executed = 0;
+        order.canceled = 0;
+        order.leaves = quantity;
+        order.price = 0;  // Market order - no price
+        order.avg_price = 0;
+        order.status = OrderStatus::PENDING;
+        order.created_at = get_current_timestamp();
+
+        m_pending_orders.push_back(order);
+        int64_t local_order_id = order.id;
+
+        // Send market order - pass 0 for price (server ignores it for market orders)
+        TZResponse resp = m_tradezero_client->place_order(
+            symbol, quantity, "sell", "market", 0.0f, 0.0f, route
+        );
+
+        if (!resp.success) {
+            LOG_E("orders", "TradeZero sell market failed: %s", resp.error.c_str());
+            // Store error for UI display
+            safe_strcpy(m_error, resp.error.c_str(), sizeof(m_error));
+            // Remove the pending order we added
+            for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
+                if (it->id == local_order_id) {
+                    m_pending_orders.erase(it);
+                    break;
+                }
+            }
+            return -1;
+        }
+        m_error[0] = '\0';  // Clear error on success
+
+        // Extract clientOrderId from response JSON
+        char client_order_id[64];
+        client_order_id[0] = '\0';
+        try {
+            auto j = json::parse(resp.body);
+            if (j.contains("clientOrderId") && j["clientOrderId"].is_string()) {
+                std::string cid = j["clientOrderId"].get<std::string>();
+                safe_strcpy(client_order_id, cid.c_str(), sizeof(client_order_id));
+            }
+        } catch (const json::exception& e) {
+            LOG_E("orders", "Failed to parse place_order response: %s", e.what());
+        }
+
+        // Fallback: generate our own ID if server didn't provide one
+        if (client_order_id[0] == '\0') {
+            std::snprintf(client_order_id, sizeof(client_order_id), "SELL_MKT_%s_%lld",
+                         symbol, static_cast<long long>(get_current_timestamp()));
+            LOG_W("orders", "Server didn't return clientOrderId, generated: %s", client_order_id);
+        }
+
+        // Update the local order with the real client_order_id
+        for (auto& o : m_pending_orders) {
+            if (o.id == local_order_id) {
+                safe_strcpy(o.client_order_id, client_order_id, sizeof(o.client_order_id));
+                break;
+            }
+        }
+
+        LOG_I("orders", "SELL MARKET order placed via TradeZero: id=%lld %s qty=%d",
+              static_cast<long long>(local_order_id), symbol, quantity);
+
+        if (m_order_callback) {
+            for (const auto& o : m_pending_orders) {
+                if (o.id == local_order_id) {
+                    m_order_callback(o);
+                    break;
+                }
+            }
+        }
+
+        return local_order_id;
+    } else {
+        LOG_E("orders", "TradeZero client not configured");
+        return -1;
+    }
+}
+
 bool OrderManager::cancel_order(int64_t order_id) {
     MutexLock lock(m_mutex);
 

@@ -36,6 +36,7 @@ public:
     // Place orders (route is optional, nullptr uses default/SMART routing)
     int64_t buy(const char* symbol, int quantity, float price, const char* route = nullptr) EXCLUDES(m_mutex);
     int64_t sell(const char* symbol, int quantity, float price, const char* route = nullptr) EXCLUDES(m_mutex);
+    int64_t sell_market(const char* symbol, int quantity, const char* route = nullptr) EXCLUDES(m_mutex);
 
     // Cancel orders
     bool cancel_order(int64_t order_id) EXCLUDES(m_mutex);

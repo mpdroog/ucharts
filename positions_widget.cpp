@@ -118,6 +118,28 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
     }
     ImGui::EndChild();
 
+    // SELL ALL button (always visible, disabled when no positions)
+    if (m_order_mgr != nullptr) {
+        std::vector<Position> positions = m_order_mgr->get_open_positions();
+        bool has_positions = !positions.empty();
+
+        ImGui::BeginDisabled(!has_positions);
+        ImGui::PushStyleColor(ImGuiCol_Button, make_color(150, 0, 0, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, make_color(200, 0, 0, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, make_color(255, 0, 0, 255));
+
+        if (ImGui::Button("SELL ALL (Ctrl+Shift+C)", ImVec2(size.x - 8.0f, 0))) {
+            for (const auto& pos : positions) {
+                m_order_mgr->sell_market(pos.symbol, pos.quantity);
+            }
+        }
+
+        ImGui::PopStyleColor(3);
+        ImGui::EndDisabled();
+    }
+
+    ImGui::Spacing();
+
     // Pending orders section
     ImGui::TextUnformatted("Pending Orders");
     ImGui::Separator();

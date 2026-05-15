@@ -769,6 +769,78 @@ TEST(get_accounts_from_tradezero) {
     ASSERT(client.is_configured());
 }
 
+TEST(sell_market_order) {
+    // Test sell_market() sends market order and closes position
+    setup_tradezero_client();
+    ASSERT(g_test_db.init(TEST_DB));
+    g_test_market.set_data_source(DataSourceMode::FILE);
+    g_test_market.set_data_dir(TEST_DATA_DIR);
+    ASSERT(g_test_market.load_symbol("TEST"));
+    reset_global_om();
+
+    // Get market prices
+    std::vector<Level2Entry> bids, asks;
+    float best_bid = 0, best_ask = 0;
+    ASSERT(g_test_market.get_level2("TEST", bids, asks, best_bid, best_ask));
+
+    // Step 1: Buy 100 shares to create a position
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        int64_t buy_order = g_test_om.buy("TEST", 100, best_ask);
+        ASSERT(buy_order > 0);
+    }
+    ASSERT(wait_for_pending_count(0));
+
+    // Verify position exists
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        Position* pos = g_test_om.find_position("TEST");
+        ASSERT(pos != nullptr);
+        ASSERT_EQ(pos->quantity, 100);
+    }
+
+    // Step 2: Sell at market (panic sell)
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        int64_t sell_order = g_test_om.sell_market("TEST", 100);
+        ASSERT(sell_order > 0);
+    }
+    ASSERT(wait_for_pending_count(0));
+
+    // Position should be closed
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        Position* pos = g_test_om.find_position("TEST");
+        ASSERT(pos == nullptr);
+        ASSERT(g_test_om.get_open_positions().empty());
+
+        // Should have closed position
+        const std::vector<ClosedPosition>& closed = g_test_om.get_closed_positions();
+        ASSERT(!closed.empty());
+        int total_closed = 0;
+        for (const auto& c : closed) {
+            if (symbols_equal(c.symbol, "TEST")) {
+                total_closed += c.quantity;
+            }
+        }
+        ASSERT_EQ(total_closed, 100);
+    }
+
+    g_test_db.close();
+}
+
+TEST(sell_market_without_position_fails) {
+    // Test that sell_market() fails when no position exists
+    setup_tradezero_client();
+    reset_global_om();
+
+    {
+        std::lock_guard<std::mutex> lock(g_om_mutex);
+        int64_t sell_order = g_test_om.sell_market("NOPOS", 100);
+        ASSERT_EQ(sell_order, -1);  // Should fail
+    }
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -818,6 +890,11 @@ int main(int argc, char* argv[]) {
     run_get_executions_empty_on_fresh_start();
 
     run_get_accounts_from_tradezero();
+
+    run_sell_market_order();
+    unlink(TEST_DB);
+
+    run_sell_market_without_position_fails();
 
     // Cleanup
     cleanup_test_directory();

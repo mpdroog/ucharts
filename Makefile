@@ -138,6 +138,7 @@ TEST_MARKET_OBJS = $(TEST_COMMON_OBJS) $(TEST_OBJS_DIR)/market_data.o $(TEST_OBJ
 TEST_TZ_OBJS = $(TEST_OBJS_DIR)/tradezero_client.o $(TEST_OBJS_DIR)/tradezero_websocket.o
 TEST_DB_OBJ = $(TEST_OBJS_DIR)/database.o
 TEST_OM_OBJ = $(TEST_OBJS_DIR)/order_manager.o
+TEST_TOAST_OBJ = $(TEST_OBJS_DIR)/toast.o
 
 test_logic: test_logic.cpp test_common.h
 	$(CXX) $(TEST_CXXFLAGS) -o $@ test_logic.cpp
@@ -148,11 +149,11 @@ test_database: test_database.cpp $(TEST_DB_OBJ) test_common.h
 test_market_data: test_market_data.cpp $(TEST_MARKET_OBJS) test_common.h
 	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -o $@ test_market_data.cpp $(TEST_MARKET_OBJS) $(TEST_LDFLAGS)
 
-test_order_manager: test_order_manager.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) test_common.h
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_order_manager.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) $(TEST_LDFLAGS)
+test_order_manager: test_order_manager.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) $(TEST_TOAST_OBJ) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_order_manager.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) $(TEST_TOAST_OBJ) $(TEST_LDFLAGS)
 
-test_integration: test_integration.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) test_common.h
-	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_integration.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) $(TEST_LDFLAGS)
+test_integration: test_integration.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) $(TEST_TOAST_OBJ) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_integration.cpp $(TEST_OM_OBJ) $(TEST_DB_OBJ) $(TEST_MARKET_OBJS) $(TEST_TZ_OBJS) $(TEST_TOAST_OBJ) $(TEST_LDFLAGS)
 
 test_async_io: test_async_io.cpp $(TEST_MARKET_OBJS) test_common.h
 	$(CXX) $(TEST_CXXFLAGS) -DMARKET_DATA_TEST_MODE -pthread -o $@ test_async_io.cpp $(TEST_MARKET_OBJS) $(TEST_LDFLAGS)

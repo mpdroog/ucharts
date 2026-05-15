@@ -328,8 +328,23 @@ static void process_hotkeys() {
         }
     }
 
+    // Check for Ctrl+Shift+C (SELL ALL positions at market - panic button)
+    if ((ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) && ImGui::GetIO().KeyShift) {
+        if (ImGui::IsKeyPressed(ImGuiKey_C)) {
+            // SELL ALL open positions at market
+            std::vector<Position> positions = g_order_manager.get_open_positions();
+            if (positions.empty()) {
+                get_toast_manager().info("No positions to close");
+            } else {
+                for (const auto& pos : positions) {
+                    g_order_manager.sell_market(pos.symbol, pos.quantity, route);
+                }
+            }
+        }
+    }
+
     // Check for Ctrl+number keys (sell orders) - also support Command on macOS
-    if (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) {
+    if ((ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) && !ImGui::GetIO().KeyShift) {
         if (ImGui::IsKeyPressed(ImGuiKey_1)) {
             int qty = g_order_manager.calculate_sell_quantity(symbol, 25);
             if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f, route);
@@ -343,7 +358,7 @@ static void process_hotkeys() {
             int qty = g_order_manager.calculate_sell_quantity(symbol, 100);
             if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_C)) {
-            // Sell all at bid-5c
+            // Sell selected ticker at bid-5c
             int qty = g_order_manager.calculate_sell_quantity(symbol, 100);
             if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_X)) {
@@ -1097,9 +1112,9 @@ int main(int argc, char** argv) {
         bool tz_pnl_ok = get_tradezero_pnl().is_connected();
         ImGui::TextColored(tz_rest_ok ? col_green : col_red, "TZ");
         ImGui::SameLine();
-        ImGui::TextColored(tz_ord_ok ? col_green : col_red, "Ord");
+        ImGui::TextColored(tz_ord_ok ? col_green : col_red, "TRADE");
         ImGui::SameLine();
-        ImGui::TextColored(tz_pnl_ok ? col_green : col_red, "PnL");
+        ImGui::TextColored(tz_pnl_ok ? col_green : col_red, "P&L");
         ImGui::SameLine();
 
         // Clock (centered)
