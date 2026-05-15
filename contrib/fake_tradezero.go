@@ -119,6 +119,46 @@ func handlePositions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleRoutes(w http.ResponseWriter, r *http.Request) {
+	logInfo("REST: GET %s", r.URL.Path)
+	w.Header().Set("Content-Type", "application/json")
+	// Return mock routes matching TradeZero API format
+	response := map[string]interface{}{
+		"routes": []map[string]interface{}{
+			{
+				"routeName":     "SMART",
+				"orderTypes":    []string{"Market", "Limit", "Stop", "StopLimit"},
+				"securityTypes": []string{"Stock"},
+				"timesInForce":  []string{"Day", "GoodTillCancel"},
+				"useDisplayQty": false,
+			},
+			{
+				"routeName":     "ARCA",
+				"orderTypes":    []string{"Market", "Limit"},
+				"securityTypes": []string{"Stock"},
+				"timesInForce":  []string{"Day"},
+				"useDisplayQty": true,
+			},
+			{
+				"routeName":     "NASDAQ",
+				"orderTypes":    []string{"Market", "Limit", "MarketOnClose", "LimitOnClose"},
+				"securityTypes": []string{"Stock"},
+				"timesInForce":  []string{"Day"},
+				"useDisplayQty": false,
+			},
+		},
+	}
+	data, err := json.Marshal(response)
+	if err != nil {
+		logError("REST: Failed to marshal routes: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := w.Write(data); err != nil {
+		logError("REST: Failed to write routes response: %v", err)
+	}
+}
+
 func handleOrders(w http.ResponseWriter, r *http.Request) {
 	logInfo("REST: GET %s", r.URL.Path)
 	ordersMu.RLock()
@@ -773,7 +813,9 @@ func main() {
 	httpMux.HandleFunc("/v1/api/accounts", handleAccounts) // List all accounts (exact match)
 	httpMux.HandleFunc("/v1/api/accounts/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if strings.HasSuffix(path, "/positions") {
+		if strings.HasSuffix(path, "/routes") {
+			handleRoutes(w, r)
+		} else if strings.HasSuffix(path, "/positions") {
 			handlePositions(w, r)
 		} else if strings.HasSuffix(path, "/executions") {
 			handleExecutions(w, r)

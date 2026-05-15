@@ -62,6 +62,11 @@ static int g_selected_account_index = -1;
 static bool g_accounts_loading = false;
 static char g_account_error[256] = "";
 
+// Trading routes
+static std::vector<TZRoute> g_available_routes;
+static int g_selected_route_index = 0;  // 0 = default/SMART routing
+static std::mutex g_routes_mutex;
+
 // TradeZero initialization thread (stored for proper cleanup)
 static std::thread g_tradezero_init_thread;
 
@@ -273,6 +278,22 @@ static void get_nyc_time(char* buf, size_t buf_size) {
 // Forward declaration
 static void update_charts_for_selected_ticker();
 
+// Get currently selected trading route (returns nullptr for default routing)
+// Uses static buffer to safely return the route name outside the lock
+static const char* get_selected_route() {
+    static char s_route_buffer[32];
+    std::lock_guard<std::mutex> lock(g_routes_mutex);
+    if (g_available_routes.empty() || g_selected_route_index < 0 ||
+        g_selected_route_index >= static_cast<int>(g_available_routes.size())) {
+        return nullptr;
+    }
+    std::strncpy(s_route_buffer,
+                 g_available_routes[static_cast<size_t>(g_selected_route_index)].route_name,
+                 sizeof(s_route_buffer) - 1);
+    s_route_buffer[sizeof(s_route_buffer) - 1] = '\0';
+    return s_route_buffer;
+}
+
 // Handle hotkey orders
 static void process_hotkeys() {
     // TAB cycles through ticker widgets
@@ -294,15 +315,16 @@ static void process_hotkeys() {
     float best_ask = g_ticker_widgets[g_selected_ticker].get_best_ask();
 
     // Check for Shift+number keys (buy orders)
+    const char* route = get_selected_route();
     if (ImGui::GetIO().KeyShift) {
         if (ImGui::IsKeyPressed(ImGuiKey_1)) {
-            g_order_manager.buy(symbol, 100, best_ask + 0.05f);
+            g_order_manager.buy(symbol, 100, best_ask + 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_2)) {
-            g_order_manager.buy(symbol, 200, best_ask + 0.05f);
+            g_order_manager.buy(symbol, 200, best_ask + 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_3)) {
-            g_order_manager.buy(symbol, 500, best_ask + 0.05f);
+            g_order_manager.buy(symbol, 500, best_ask + 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_4)) {
-            g_order_manager.buy(symbol, 1000, best_ask + 0.05f);
+            g_order_manager.buy(symbol, 1000, best_ask + 0.05f, route);
         }
     }
 
@@ -310,20 +332,20 @@ static void process_hotkeys() {
     if (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) {
         if (ImGui::IsKeyPressed(ImGuiKey_1)) {
             int qty = g_order_manager.calculate_sell_quantity(symbol, 25);
-            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f);
+            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_2)) {
             int qty = g_order_manager.calculate_sell_quantity(symbol, 50);
-            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f);
+            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_3)) {
             int qty = g_order_manager.calculate_sell_quantity(symbol, 75);
-            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f);
+            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_4)) {
             int qty = g_order_manager.calculate_sell_quantity(symbol, 100);
-            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f);
+            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_C)) {
             // Sell all at bid-5c
             int qty = g_order_manager.calculate_sell_quantity(symbol, 100);
-            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f);
+            if (qty > 0) g_order_manager.sell(symbol, qty, best_bid - 0.05f, route);
         } else if (ImGui::IsKeyPressed(ImGuiKey_X)) {
             // Cancel all pending orders (Ctrl+X)
             g_order_manager.cancel_all_orders(nullptr);
@@ -879,7 +901,7 @@ int main(int argc, char** argv) {
                 return;
             }
 
-            // Step 2: Fetch REST snapshot (positions, orders, executions)
+            // Step 2: Fetch REST snapshot (positions, orders, executions, routes)
             auto positions = get_tradezero_client().get_positions();
             g_order_manager.load_tradezero_positions(positions);
 
@@ -888,6 +910,15 @@ int main(int argc, char** argv) {
 
             auto executions = get_tradezero_client().get_executions();
             g_order_manager.load_tradezero_executions(executions);
+
+            // Fetch available trading routes
+            {
+                auto routes = get_tradezero_client().get_routes();
+                std::lock_guard<std::mutex> lock(g_routes_mutex);
+                g_available_routes = routes;
+                g_selected_route_index = 0;  // Default to first route
+                LOG_I("tradezero", "Loaded %zu trading routes", routes.size());
+            }
 
             // Step 3: Portfolio WebSocket is already connected and subscribed
             // It's now processing buffered + new messages
@@ -1091,7 +1122,22 @@ int main(int argc, char** argv) {
                 account = g_tz_account_info;
             }
 
-            // Build account info string
+            // Route dropdown - copy routes to avoid holding lock during ImGui rendering
+            std::vector<TZRoute> routes_copy;
+            int selected_idx;
+            {
+                std::lock_guard<std::mutex> lock(g_routes_mutex);
+                routes_copy = g_available_routes;
+                selected_idx = g_selected_route_index;
+            }
+
+            // Get current route name for width calculation
+            const char* current_route_name = "SMART";
+            if (!routes_copy.empty() && selected_idx >= 0 && selected_idx < static_cast<int>(routes_copy.size())) {
+                current_route_name = routes_copy[static_cast<size_t>(selected_idx)].route_name;
+            }
+
+            // Build account info string for width calculation
             char account_text[256];
             std::snprintf(account_text, sizeof(account_text),
                          "Equity: $%.2f | BP: $%.0f | Cash: $%.2f | P&L: %+.2f | DT: %d",
@@ -1101,15 +1147,49 @@ int main(int argc, char** argv) {
                          static_cast<double>(account.day_pnl),
                          account.day_trades_remaining);
 
-            // Calculate position for right alignment
-            // Add extra margin to account for SameLine() spacing between colored segments
+            // Calculate total width: Route label + combo + spacing + account text
+            float route_label_width = ImGui::CalcTextSize("Route:").x;
+            float combo_width = 70.0f;
+            float separator_width = ImGui::CalcTextSize(" | ").x;
             float account_text_width = ImGui::CalcTextSize(account_text).x;
-            float spacing_margin = ImGui::GetStyle().ItemSpacing.x * 2;  // 2 SameLine() calls
+            float spacing = ImGui::GetStyle().ItemSpacing.x * 5;
+            float total_width = route_label_width + combo_width + separator_width + account_text_width + spacing;
+
+            // Position cursor for right alignment
             float cursor_y = ImGui::GetCursorPosY();
             ImGui::SetCursorPosY(cursor_y - ImGui::GetTextLineHeight());
-            ImGui::SetCursorPosX(window_width - account_text_width - spacing_margin - 10.0f);
+            ImGui::SetCursorPosX(window_width - total_width - 10.0f);
 
-            // Render with color coding for P&L and day trades
+            // Render route dropdown
+            ImGui::Text("Route:");
+            ImGui::SameLine();
+            ImGui::PushItemWidth(combo_width);
+            if (!routes_copy.empty()) {
+                if (selected_idx < 0 || selected_idx >= static_cast<int>(routes_copy.size())) {
+                    selected_idx = 0;
+                }
+                if (ImGui::BeginCombo("##route", current_route_name, ImGuiComboFlags_NoArrowButton)) {
+                    for (int i = 0; i < static_cast<int>(routes_copy.size()); i++) {
+                        bool is_selected = (selected_idx == i);
+                        if (ImGui::Selectable(routes_copy[static_cast<size_t>(i)].route_name, is_selected)) {
+                            std::lock_guard<std::mutex> lock(g_routes_mutex);
+                            g_selected_route_index = i;
+                        }
+                        if (is_selected) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            } else {
+                ImGui::Text("SMART");
+            }
+            ImGui::PopItemWidth();
+            ImGui::SameLine();
+            ImGui::Text(" | ");
+            ImGui::SameLine();
+
+            // Render account info with color coding for P&L and day trades
             ImGui::Text("Equity: $%.2f | BP: $%.0f | Cash: $%.2f | ",
                        static_cast<double>(account.equity),
                        static_cast<double>(account.buying_power),

@@ -91,6 +91,45 @@ TEST(tzaccount_struct_initialization) {
     ASSERT_TRUE(account.status[0] == '\0');
 }
 
+TEST(tzroute_struct_initialization) {
+    TZRoute route;
+    ASSERT_TRUE(route.route_name[0] == '\0');
+    ASSERT_TRUE(!route.use_display_qty);
+    ASSERT_TRUE(!route.order_types.market);
+    ASSERT_TRUE(!route.order_types.limit);
+    ASSERT_TRUE(!route.order_types.stop);
+    ASSERT_TRUE(!route.order_types.stop_limit);
+}
+
+TEST(client_get_routes_returns_vector) {
+    // This test verifies the get_routes() method exists and returns a vector
+    // Full integration test with mock server tests the JSON parsing
+    TradeZeroClient client;
+    client.set_credentials("test_key", "test_secret", "test_account");
+    client.set_base_url("http://localhost:8080/v1/api");
+
+    // Call get_routes - should return routes from mock server
+    std::vector<TZRoute> routes = client.get_routes();
+    // Mock server returns 3 routes: SMART, ARCA, NASDAQ
+    ASSERT_TRUE(routes.size() == 3);
+    ASSERT_STREQ(routes[0].route_name, "SMART");
+    ASSERT_TRUE(routes[0].order_types.market);
+    ASSERT_TRUE(routes[0].order_types.limit);
+    ASSERT_TRUE(routes[0].order_types.stop);
+    ASSERT_TRUE(routes[0].order_types.stop_limit);
+    ASSERT_TRUE(!routes[0].use_display_qty);
+
+    ASSERT_STREQ(routes[1].route_name, "ARCA");
+    ASSERT_TRUE(routes[1].order_types.market);
+    ASSERT_TRUE(routes[1].order_types.limit);
+    ASSERT_TRUE(!routes[1].order_types.stop);
+    ASSERT_TRUE(routes[1].use_display_qty);
+
+    ASSERT_STREQ(routes[2].route_name, "NASDAQ");
+    ASSERT_TRUE(routes[2].order_types.market_on_close);
+    ASSERT_TRUE(routes[2].order_types.limit_on_close);
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -105,6 +144,8 @@ int main(int argc, char* argv[]) {
     RUN_TEST(client_set_account_after_keys);
     RUN_TEST(client_get_accounts_returns_vector);
     RUN_TEST(tzaccount_struct_initialization);
+    RUN_TEST(tzroute_struct_initialization);
+    RUN_TEST(client_get_routes_returns_vector);
 
     test_summary();
     return 0;

@@ -47,7 +47,7 @@ int64_t OrderManager::get_current_timestamp() const {
     return static_cast<int64_t>(std::time(nullptr));
 }
 
-int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
+int64_t OrderManager::buy(const char* symbol, int quantity, float price, const char* route) {
     if (symbol == nullptr || symbol[0] == '\0' || quantity <= 0 || price <= 0) {
         return -1;
     }
@@ -79,7 +79,7 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
 
         // Now send REST request to broker
         TZResponse resp = m_tradezero_client->place_order(
-            symbol, quantity, "buy", "limit", price, 0.0f
+            symbol, quantity, "buy", "limit", price, 0.0f, route
         );
 
         if (!resp.success) {
@@ -144,7 +144,7 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
     }
 }
 
-int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
+int64_t OrderManager::sell(const char* symbol, int quantity, float price, const char* route) {
     if (symbol == nullptr || symbol[0] == '\0' || quantity <= 0 || price <= 0) {
         return -1;
     }
@@ -181,7 +181,7 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
 
         // Now send REST request to broker
         TZResponse resp = m_tradezero_client->place_order(
-            symbol, quantity, "sell", "limit", price, 0.0f
+            symbol, quantity, "sell", "limit", price, 0.0f, route
         );
 
         if (!resp.success) {

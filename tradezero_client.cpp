@@ -318,6 +318,80 @@ std::vector<TZAccount> TradeZeroClient::get_accounts() {
     return accounts;
 }
 
+std::vector<TZRoute> TradeZeroClient::get_routes() {
+    std::vector<TZRoute> routes;
+
+    if (!is_configured()) {
+        LOG_E("tradezero", "Client not configured for get_routes");
+        return routes;
+    }
+
+    char endpoint[128];
+    std::snprintf(endpoint, sizeof(endpoint), "/accounts/%s/routes", m_account_id);
+
+    TZResponse resp = make_request("GET", endpoint, nullptr);
+    if (!resp.success) {
+        LOG_W("tradezero", "Failed to fetch routes: HTTP %d", resp.status_code);
+        return routes;
+    }
+
+    try {
+        auto j = json::parse(resp.body);
+
+        // API returns {"routes": [...]}
+        if (!j.is_object() || !j.contains("routes") || !j["routes"].is_array()) {
+            LOG_E("tradezero", "Routes response missing 'routes' array: %.200s", resp.body.c_str());
+            return routes;
+        }
+
+        for (const auto& route_json : j["routes"]) {
+            TZRoute route;
+
+            if (route_json.contains("routeName") && route_json["routeName"].is_string()) {
+                std::string name = route_json["routeName"].get<std::string>();
+                std::strncpy(route.route_name, name.c_str(), sizeof(route.route_name) - 1);
+                route.route_name[sizeof(route.route_name) - 1] = '\0';
+            }
+
+            if (route_json.contains("useDisplayQty") && route_json["useDisplayQty"].is_boolean()) {
+                route.use_display_qty = route_json["useDisplayQty"].get<bool>();
+            }
+
+            // Parse orderTypes array
+            if (route_json.contains("orderTypes") && route_json["orderTypes"].is_array()) {
+                for (const auto& ot : route_json["orderTypes"]) {
+                    if (!ot.is_string()) continue;
+                    std::string order_type = ot.get<std::string>();
+                    if (order_type == "Market") route.order_types.market = true;
+                    else if (order_type == "Limit") route.order_types.limit = true;
+                    else if (order_type == "Stop") route.order_types.stop = true;
+                    else if (order_type == "StopLimit") route.order_types.stop_limit = true;
+                    else if (order_type == "RangeOrder") route.order_types.range_order = true;
+                    else if (order_type == "MarketOnOpen") route.order_types.market_on_open = true;
+                    else if (order_type == "LimitOnOpen") route.order_types.limit_on_open = true;
+                    else if (order_type == "TrailStop") route.order_types.trail_stop = true;
+                    else if (order_type == "MarketOnClose") route.order_types.market_on_close = true;
+                    else if (order_type == "LimitOnClose") route.order_types.limit_on_close = true;
+                    else if (order_type == "Pegged") route.order_types.pegged = true;
+                }
+            }
+
+            if (route.route_name[0] != '\0') {
+                LOG_I("tradezero", "Route: %s (limit=%d, market=%d)",
+                      route.route_name, route.order_types.limit, route.order_types.market);
+                routes.push_back(route);
+            }
+        }
+
+        LOG_I("tradezero", "Fetched %zu routes", routes.size());
+
+    } catch (const json::exception& e) {
+        LOG_E("tradezero", "Routes JSON parse failed: %s (body: %.200s)", e.what(), resp.body.c_str());
+    }
+
+    return routes;
+}
+
 std::vector<Position> TradeZeroClient::get_positions() {
     std::vector<Position> positions;
 
@@ -591,7 +665,8 @@ std::vector<ClosedPosition> TradeZeroClient::get_executions() {
 }
 
 TZResponse TradeZeroClient::place_order(const char* symbol, int quantity, const char* side,
-                                        const char* order_type, float limit_price, float stop_price) {
+                                        const char* order_type, float limit_price, float stop_price,
+                                        const char* route) {
     if (symbol == nullptr || side == nullptr || order_type == nullptr) {
         TZResponse response;
         std::snprintf(m_error, sizeof(m_error), "Invalid order parameters");
@@ -635,14 +710,18 @@ TZResponse TradeZeroClient::place_order(const char* symbol, int quantity, const 
         j["stopPrice"] = stop_price;
     }
     j["timeInForce"] = "Day";
+    if (route != nullptr && route[0] != '\0') {
+        j["route"] = route;
+    }
 
     std::string body = j.dump();
 
     char endpoint[128];
     std::snprintf(endpoint, sizeof(endpoint), "/accounts/%s/order", m_account_id);
 
-    LOG_I("tradezero", "Placing order: %s %d %s @ %.2f (%s)",
-          side, quantity, symbol, static_cast<double>(limit_price), order_type);
+    LOG_I("tradezero", "Placing order: %s %d %s @ %.2f (%s) route=%s",
+          side, quantity, symbol, static_cast<double>(limit_price), order_type,
+          (route && route[0]) ? route : "default");
     LOG_D("tradezero", "Order body: %s", body.c_str());
 
     return make_request("POST", endpoint, body.c_str());

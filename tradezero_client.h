@@ -29,6 +29,37 @@ struct TZAccount {
     }
 };
 
+// Order types supported by a route
+struct TZRouteOrderTypes {
+    bool market;
+    bool limit;
+    bool stop;
+    bool stop_limit;
+    bool range_order;
+    bool market_on_open;
+    bool limit_on_open;
+    bool trail_stop;
+    bool market_on_close;
+    bool limit_on_close;
+    bool pegged;
+
+    TZRouteOrderTypes() : market(false), limit(false), stop(false), stop_limit(false),
+        range_order(false), market_on_open(false), limit_on_open(false),
+        trail_stop(false), market_on_close(false), limit_on_close(false), pegged(false) {}
+};
+
+// TradeZero trading route (from GET /accounts/:accountId/routes)
+struct TZRoute {
+    char route_name[32];
+    TZRouteOrderTypes order_types;
+    bool use_display_qty;
+
+    TZRoute() {
+        route_name[0] = '\0';
+        use_display_qty = false;
+    }
+};
+
 // TradeZero REST API client
 // Purpose: Order placement/cancellation and initial data sync
 // Account data comes from P&L WebSocket stream
@@ -48,6 +79,9 @@ public:
     // Account discovery
     std::vector<TZAccount> get_accounts();  // Get all accounts for API credentials
 
+    // Trading routes
+    std::vector<TZRoute> get_routes();  // Get available trading routes for account
+
     // Initial data sync (before WebSocket subscription)
     // Returns parsed data directly; empty vector on failure (errors logged internally)
     std::vector<Position> get_positions();
@@ -56,7 +90,8 @@ public:
 
     // Order operations (no WebSocket equivalent)
     TZResponse place_order(const char* symbol, int quantity, const char* side,
-                          const char* order_type, float limit_price, float stop_price);
+                          const char* order_type, float limit_price, float stop_price,
+                          const char* route = nullptr);
     TZResponse cancel_order(const char* client_order_id);
     TZResponse cancel_all_orders();
 
