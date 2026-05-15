@@ -27,6 +27,7 @@
 #include <cstring>
 #include <cmath>
 #include <ctime>
+#include <clocale>
 #include <vector>
 #include <algorithm>
 #include <string>
@@ -685,6 +686,9 @@ static void glfw_error_callback(int error, const char* description) {
 }
 
 int main(int argc, char** argv) {
+    // Use C locale for consistent numeric formatting (always use '.' as decimal separator)
+    std::setlocale(LC_NUMERIC, "C");
+
     // Parse CLI arguments
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--verbose") == 0) {
@@ -796,13 +800,18 @@ int main(int argc, char** argv) {
             g_tz_account_info.day_pnl = update.day_pnl;
         });
 
-        get_tradezero_portfolio().set_order_callback([](const TZOrderUpdate& update) {
+        // Set order/position callbacks on both streams (messages can arrive on either)
+        auto order_callback = [](const TZOrderUpdate& update) {
             g_order_manager.on_tradezero_order_update(update);
-        });
-
-        get_tradezero_portfolio().set_position_callback([](const TZPositionUpdate& update) {
+        };
+        auto position_callback = [](const TZPositionUpdate& update) {
             g_order_manager.on_tradezero_position_update(update);
-        });
+        };
+
+        get_tradezero_portfolio().set_order_callback(order_callback);
+        get_tradezero_portfolio().set_position_callback(position_callback);
+        get_tradezero_pnl().set_order_callback(order_callback);
+        get_tradezero_pnl().set_position_callback(position_callback);
 
         // Connection status toasts for user awareness
         get_tradezero_portfolio().set_connection_callback([](bool connected) {
@@ -1107,8 +1116,13 @@ int main(int argc, char** argv) {
                        static_cast<double>(account.cash_balance));
             ImGui::SameLine();
 
-            ImVec4 pnl_color = (account.day_pnl >= 0) ? col_green : col_red;
-            ImGui::TextColored(pnl_color, "P&L: %+.2f", static_cast<double>(account.day_pnl));
+            if (account.day_pnl > 0.0f) {
+                ImGui::TextColored(col_green, "P&L: +%.2f", static_cast<double>(account.day_pnl));
+            } else if (account.day_pnl < 0.0f) {
+                ImGui::TextColored(col_red, "P&L: %.2f", static_cast<double>(account.day_pnl));
+            } else {
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "P&L: 0.00");
+            }
             ImGui::SameLine();
 
             ImVec4 dt_color = col_green;

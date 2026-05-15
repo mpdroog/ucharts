@@ -5,6 +5,7 @@
 #include "logger.h"
 #include <cstring>
 #include <ctime>
+#include <cctype>
 #include <algorithm>
 #include <nlohmann/json.hpp>
 
@@ -121,21 +122,8 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
             }
         }
 
-        LOG_I("orders", "BUY order placed via TradeZero: id=%lld %s qty=%d @ %.2f",
-              static_cast<long long>(local_order_id), symbol, quantity, static_cast<double>(price));
-
-        // Save to database
-        if (m_db != nullptr && m_db->is_open()) {
-            // Find the updated order to save
-            for (const auto& o : m_pending_orders) {
-                if (o.id == local_order_id) {
-                    if (m_db->save_order(o) < 0) {
-                        LOG_W("orders", "Failed to save order to database: %s", m_db->last_error());
-                    }
-                    break;
-                }
-            }
-        }
+        LOG_I("orders", "BUY order placed via TradeZero: id=%lld %s qty=%d @ %.2f clientOrderId=%s",
+              static_cast<long long>(local_order_id), symbol, quantity, static_cast<double>(price), client_order_id);
 
         if (m_order_callback) {
             for (const auto& o : m_pending_orders) {
@@ -236,18 +224,6 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
         LOG_I("orders", "SELL order placed via TradeZero: id=%lld %s qty=%d @ %.2f",
               static_cast<long long>(local_order_id), symbol, quantity, static_cast<double>(price));
 
-        // Save to database
-        if (m_db != nullptr && m_db->is_open()) {
-            for (const auto& o : m_pending_orders) {
-                if (o.id == local_order_id) {
-                    if (m_db->save_order(o) < 0) {
-                        LOG_W("orders", "Failed to save order to database: %s", m_db->last_error());
-                    }
-                    break;
-                }
-            }
-        }
-
         if (m_order_callback) {
             for (const auto& o : m_pending_orders) {
                 if (o.id == local_order_id) {
@@ -275,6 +251,10 @@ bool OrderManager::cancel_order(int64_t order_id) {
         TZResponse resp = m_tradezero_client->cancel_order(order->client_order_id);
         if (!resp.success) {
             LOG_E("orders", "TradeZero cancel failed: %s", resp.error.c_str());
+            safe_strcpy(m_error, resp.error.c_str(), sizeof(m_error));
+            if (m_error_callback) {
+                m_error_callback(order->symbol, resp.error.c_str());
+            }
             return false;
         }
 
@@ -286,6 +266,9 @@ bool OrderManager::cancel_order(int64_t order_id) {
         return true;
     } else {
         LOG_E("orders", "TradeZero client not configured");
+        if (m_error_callback) {
+            m_error_callback("", "TradeZero client not configured");
+        }
         return false;
     }
 }
@@ -330,9 +313,9 @@ bool OrderManager::cancel_all_orders(const char* symbol) {
     }
 }
 
-const std::vector<Order>& OrderManager::get_pending_orders() const {
+std::vector<Order> OrderManager::get_pending_orders() const {
     MutexLock lock(m_mutex);
-    return m_pending_orders;
+    return m_pending_orders;  // Returns copy for thread safety
 }
 
 Order* OrderManager::find_order(int64_t order_id) {
@@ -350,14 +333,14 @@ Order* OrderManager::find_order_locked(int64_t order_id) {
     return nullptr;
 }
 
-const std::vector<Position>& OrderManager::get_open_positions() const {
+std::vector<Position> OrderManager::get_open_positions() const {
     MutexLock lock(m_mutex);
-    return m_open_positions;
+    return m_open_positions;  // Returns copy for thread safety
 }
 
-const std::vector<ClosedPosition>& OrderManager::get_closed_positions() const {
+std::vector<ClosedPosition> OrderManager::get_closed_positions() const {
     MutexLock lock(m_mutex);
-    return m_closed_positions;
+    return m_closed_positions;  // Returns copy for thread safety
 }
 
 Position* OrderManager::find_position(const char* symbol) {
@@ -508,31 +491,11 @@ void OrderManager::set_error_callback(OrderErrorCallback cb) {
 }
 
 void OrderManager::load_from_database() {
-    if (m_db == nullptr || !m_db->is_open()) return;
-
-    MutexLock lock(m_mutex);
-
-    m_db->load_pending_orders(m_pending_orders);
-    m_db->load_open_positions(m_open_positions);
-    m_db->load_closed_positions(m_closed_positions);
-
-    // Find max order ID
-    m_next_order_id = 1;
-    for (const auto& order : m_pending_orders) {
-        if (order.id >= m_next_order_id) {
-            m_next_order_id = order.id + 1;
-        }
-    }
+    // Orders come from TradeZero API (source of truth), not local database
 }
 
 void OrderManager::save_to_database() {
-    if (m_db == nullptr || !m_db->is_open()) return;
-
-    MutexLock lock(m_mutex);
-
-    for (const auto& pos : m_open_positions) {
-        m_db->save_position(pos);
-    }
+    // Orders come from TradeZero API (source of truth), not local database
 }
 
 // ============================================================================
@@ -567,6 +530,9 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
 
     // Find order by client_order_id
     Order* order = find_order_by_client_id_locked(update.client_order_id);
+
+    LOG_D("orders", "Looking for order with clientOrderId=%s, found=%s",
+          update.client_order_id, order ? "yes" : "no");
 
     // If not found, look for a pending order with temporary PENDING_ prefix
     // This handles the case where WebSocket callback runs before buy()/sell()
@@ -603,15 +569,17 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
         new_order.price = update.price_avg > 0 ? update.price_avg : update.limit_price;
         new_order.created_at = get_current_timestamp();
 
-        // Parse order status
-        if (std::strcmp(update.order_status, "Filled") == 0) {
+        // Parse order status (case-insensitive)
+        std::string status_str(update.order_status);
+        std::transform(status_str.begin(), status_str.end(), status_str.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (status_str == "filled") {
             new_order.status = OrderStatus::FILLED;
-        } else if (std::strcmp(update.order_status, "Canceled") == 0 ||
-                   std::strcmp(update.order_status, "Cancelled") == 0) {
-            // Accept both American (Canceled) and British (Cancelled) spelling
+        } else if (status_str == "canceled" || status_str == "cancelled") {
             new_order.status = OrderStatus::CANCELLED;
-        } else if (std::strcmp(update.order_status, "Rejected") == 0) {
-            new_order.status = OrderStatus::CANCELLED;  // Treat rejected as cancelled
+        } else if (status_str == "rejected") {
+            new_order.status = OrderStatus::REJECTED;
             was_rejected = true;
             LOG_W("orders", "New order REJECTED: %s %s qty=%d",
                   update.side, update.symbol, update.order_quantity);
@@ -632,15 +600,17 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
         order->filled = update.executed;
         order->price = update.price_avg > 0 ? update.price_avg : update.limit_price;
 
-        // Parse order status
-        if (std::strcmp(update.order_status, "Filled") == 0) {
+        // Parse order status (case-insensitive)
+        std::string status_str(update.order_status);
+        std::transform(status_str.begin(), status_str.end(), status_str.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (status_str == "filled") {
             order->status = OrderStatus::FILLED;
-        } else if (std::strcmp(update.order_status, "Canceled") == 0 ||
-                   std::strcmp(update.order_status, "Cancelled") == 0) {
-            // Accept both American (Canceled) and British (Cancelled) spelling
+        } else if (status_str == "canceled" || status_str == "cancelled") {
             order->status = OrderStatus::CANCELLED;
-        } else if (std::strcmp(update.order_status, "Rejected") == 0) {
-            order->status = OrderStatus::CANCELLED;  // Treat rejected as cancelled
+        } else if (status_str == "rejected") {
+            order->status = OrderStatus::REJECTED;
             was_rejected = true;
             LOG_W("orders", "Order REJECTED: %s %s qty=%d - %s",
                   update.side, update.symbol, update.order_quantity, update.order_status);
@@ -676,8 +646,21 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
                 break;
             }
         }
-    } else if (order->status == OrderStatus::CANCELLED) {
-        // Remove cancelled order from pending
+    } else if (order->status == OrderStatus::CANCELLED || order->status == OrderStatus::REJECTED) {
+        // Add rejected orders to closed positions for visibility
+        if (was_rejected || order->status == OrderStatus::REJECTED) {
+            ClosedPosition rejected;
+            safe_strcpy(rejected.symbol, order->symbol, sizeof(rejected.symbol));
+            rejected.quantity = order->quantity;
+            rejected.entry_price = order->price;
+            rejected.exit_price = order->price;
+            rejected.entry_time = order->created_at;
+            rejected.exit_time = get_current_timestamp();
+            rejected.status = ClosedPositionStatus::REJECTED;
+            m_closed_positions.push_back(rejected);
+        }
+
+        // Remove from pending orders
         for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
             if (std::strcmp(it->client_order_id, update.client_order_id) == 0) {
                 m_pending_orders.erase(it);
@@ -769,11 +752,11 @@ void OrderManager::on_tradezero_pnl_snapshot(const TZPnLSnapshot& snapshot) {
     }
 }
 
-const std::vector<ClosedPosition>& OrderManager::get_todays_closed_positions() const {
+std::vector<ClosedPosition> OrderManager::get_todays_closed_positions() const {
     MutexLock lock(m_mutex);
     // For now, return all closed positions
     // TODO: Filter to only today's trades when we have proper timestamps
-    return m_closed_positions;
+    return m_closed_positions;  // Returns copy for thread safety
 }
 
 const char* OrderManager::last_error() const {
@@ -814,14 +797,11 @@ void OrderManager::load_tradezero_positions(const std::vector<Position>& positio
 void OrderManager::load_tradezero_orders(const std::vector<Order>& orders) {
     MutexLock lock(m_mutex);
 
-    // Load pending/active orders from TradeZero
     for (const auto& tz_order : orders) {
-        // Only load orders that aren't filled or cancelled
         if (tz_order.status == OrderStatus::PENDING || tz_order.status == OrderStatus::PARTIAL) {
-            // Check if we already have this order
+            // Add to pending orders
             Order* existing = find_order_by_client_id_locked(tz_order.client_order_id);
             if (existing == nullptr) {
-                // Add new order
                 m_pending_orders.push_back(tz_order);
 
                 LOG_I("tradezero", "Loaded order from REST: %s %s qty=%d @ %.2f status=%c",
@@ -829,14 +809,24 @@ void OrderManager::load_tradezero_orders(const std::vector<Order>& orders) {
                       tz_order.symbol, tz_order.quantity,
                       static_cast<double>(tz_order.price),
                       static_cast<char>(tz_order.status));
-
-                // Save to database
-                if (m_db != nullptr && m_db->is_open()) {
-                    if (m_db->save_order(tz_order) < 0) {
-                        LOG_W("orders", "Failed to save order to database: %s", m_db->last_error());
-                    }
-                }
             }
+        } else if (tz_order.status == OrderStatus::REJECTED) {
+            // Add rejected orders to closed positions for visibility
+            ClosedPosition rejected;
+            safe_strcpy(rejected.symbol, tz_order.symbol, sizeof(rejected.symbol));
+            rejected.quantity = tz_order.quantity;
+            rejected.entry_price = tz_order.price;
+            rejected.exit_price = tz_order.price;  // No fill, so same price
+            rejected.entry_time = tz_order.created_at;
+            rejected.exit_time = tz_order.created_at;
+            rejected.status = ClosedPositionStatus::REJECTED;
+
+            m_closed_positions.push_back(rejected);
+
+            LOG_I("tradezero", "Loaded rejected order from REST: %s %s qty=%d @ %.2f",
+                  tz_order.side == OrderSide::BUY ? "BUY" : "SELL",
+                  tz_order.symbol, tz_order.quantity,
+                  static_cast<double>(tz_order.price));
         }
     }
 }

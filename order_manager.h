@@ -41,13 +41,13 @@ public:
     bool cancel_order(int64_t order_id) EXCLUDES(m_mutex);
     bool cancel_all_orders(const char* symbol = nullptr) EXCLUDES(m_mutex);
 
-    // Get orders
-    const std::vector<Order>& get_pending_orders() const EXCLUDES(m_mutex);
+    // Get orders (returns copy for thread safety)
+    std::vector<Order> get_pending_orders() const EXCLUDES(m_mutex);
     Order* find_order(int64_t order_id) EXCLUDES(m_mutex);
 
-    // Get positions
-    const std::vector<Position>& get_open_positions() const EXCLUDES(m_mutex);
-    const std::vector<ClosedPosition>& get_closed_positions() const EXCLUDES(m_mutex);
+    // Get positions (returns copy for thread safety)
+    std::vector<Position> get_open_positions() const EXCLUDES(m_mutex);
+    std::vector<ClosedPosition> get_closed_positions() const EXCLUDES(m_mutex);
     Position* find_position(const char* symbol) EXCLUDES(m_mutex);
 
     // Update positions with current market prices
@@ -72,7 +72,7 @@ public:
     void on_tradezero_order_update(const TZOrderUpdate& update) EXCLUDES(m_mutex);
     void on_tradezero_position_update(const TZPositionUpdate& update) EXCLUDES(m_mutex);
     void on_tradezero_pnl_snapshot(const TZPnLSnapshot& snapshot) EXCLUDES(m_mutex);
-    const std::vector<ClosedPosition>& get_todays_closed_positions() const EXCLUDES(m_mutex);
+    std::vector<ClosedPosition> get_todays_closed_positions() const EXCLUDES(m_mutex);
 
     // Load initial data from TradeZero REST API
     void load_tradezero_positions(const std::vector<Position>& positions) EXCLUDES(m_mutex);

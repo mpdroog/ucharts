@@ -52,7 +52,8 @@ enum class OrderStatus {
     PENDING = 'P',
     FILLED = 'F',
     PARTIAL = 'A',  // Partially filled
-    CANCELLED = 'X'
+    CANCELLED = 'X',
+    REJECTED = 'R'
 };
 
 // Time & Sales direction
@@ -152,6 +153,11 @@ struct Position {
 };
 
 // Closed position (trade history)
+enum class ClosedPositionStatus : char {
+    FILLED = 'F',
+    REJECTED = 'R'
+};
+
 struct ClosedPosition {
     char symbol[8];
     int quantity;
@@ -159,14 +165,19 @@ struct ClosedPosition {
     float exit_price;
     int64_t entry_time;   // Unix timestamp
     int64_t exit_time;    // Unix timestamp
+    ClosedPositionStatus status;
 
     ClosedPosition() : quantity(0), entry_price(0), exit_price(0),
-                       entry_time(0), exit_time(0) {
+                       entry_time(0), exit_time(0), status(ClosedPositionStatus::FILLED) {
         symbol[0] = '\0';
     }
 
     float pnl_usd() const {
         return static_cast<float>(quantity) * (exit_price - entry_price);
+    }
+
+    bool is_rejected() const {
+        return status == ClosedPositionStatus::REJECTED;
     }
 };
 

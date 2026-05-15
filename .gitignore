@@ -40,3 +40,4 @@ config.ini
 # macOS
 .DS_Store
 .test_objs
+ucharts.app/Contents/MacOS/

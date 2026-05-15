@@ -214,4 +214,12 @@ clean:
 clean-all: clean
 	rm -rf $(IMGUI_DIR)
 
-.PHONY: all clean clean-all check-deps test tsan thread-check thread-check-strict
+# macOS app bundle
+app: $(TARGET)
+	@mkdir -p ucharts.app/Contents/MacOS
+	@mkdir -p ucharts.app/Contents/Resources
+	cp $(TARGET) ucharts.app/Contents/MacOS/
+	@echo "App bundle created: ucharts.app"
+	@echo "Run with: open ucharts.app"
+
+.PHONY: all clean clean-all check-deps test tsan thread-check thread-check-strict app

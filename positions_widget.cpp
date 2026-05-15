@@ -67,7 +67,7 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
 
         // Position rows
         if (m_order_mgr != nullptr) {
-            const std::vector<Position>& positions = m_order_mgr->get_open_positions();
+            std::vector<Position> positions = m_order_mgr->get_open_positions();
             char close_symbol[MAX_SYMBOL_LEN];
             close_symbol[0] = '\0';
 
@@ -151,7 +151,7 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
 
         // Order rows
         if (m_order_mgr != nullptr) {
-            const std::vector<Order>& orders = m_order_mgr->get_pending_orders();
+            std::vector<Order> orders = m_order_mgr->get_pending_orders();
             int cancel_id = -1;
 
             for (const auto& order : orders) {
@@ -236,10 +236,8 @@ void PositionsWidget::render_closed_positions(ImVec2 size) {
 
         // Closed position rows
         if (m_order_mgr != nullptr) {
-            const std::vector<ClosedPosition>& closed = m_order_mgr->get_closed_positions();
+            std::vector<ClosedPosition> closed = m_order_mgr->get_closed_positions();
             for (const auto& pos : closed) {
-                float pnl = (pos.exit_price - pos.entry_price) * static_cast<float>(pos.quantity);
-
                 ImGui::Text("%s", pos.symbol);
                 ImGui::NextColumn();
                 ImGui::Text("%.2f", static_cast<double>(pos.entry_price));
@@ -247,13 +245,32 @@ void PositionsWidget::render_closed_positions(ImVec2 size) {
                 ImGui::Text("%.2f", static_cast<double>(pos.exit_price));
                 ImGui::NextColumn();
 
-                // P&L with color
-                ImU32 color = (pnl >= 0.0f) ? make_color(0, 255, 0, 255) : make_color(255, 0, 0, 255);
-                const char* sign = (pnl >= 0.0f) ? "+" : "";
+                if (pos.is_rejected()) {
+                    // Show REJECTED in orange
+                    ImGui::PushStyleColor(ImGuiCol_Text, make_color(255, 165, 0, 255));
+                    ImGui::TextUnformatted("REJECTED");
+                    ImGui::PopStyleColor();
+                } else {
+                    // P&L with color
+                    float pnl = (pos.exit_price - pos.entry_price) * static_cast<float>(pos.quantity);
+                    ImU32 color;
+                    const char* sign;
 
-                ImGui::PushStyleColor(ImGuiCol_Text, color);
-                ImGui::Text("%s%.2f", sign, static_cast<double>(pnl));
-                ImGui::PopStyleColor();
+                    if (pnl > 0.0f) {
+                        color = make_color(0, 255, 0, 255);  // Green for profit
+                        sign = "+";
+                    } else if (pnl < 0.0f) {
+                        color = make_color(255, 0, 0, 255);  // Red for loss
+                        sign = "";
+                    } else {
+                        color = make_color(150, 150, 150, 255);  // Gray for zero
+                        sign = "";
+                    }
+
+                    ImGui::PushStyleColor(ImGuiCol_Text, color);
+                    ImGui::Text("%s%.2f", sign, static_cast<double>(pnl));
+                    ImGui::PopStyleColor();
+                }
                 ImGui::NextColumn();
             }
         }

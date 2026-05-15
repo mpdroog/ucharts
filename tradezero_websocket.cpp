@@ -304,6 +304,7 @@ void TradeZeroWebSocket::set_position_pnl_callback(TZPositionPnLCallback callbac
 void TradeZeroWebSocket::set_order_callback(TZOrderCallback callback) {
     MutexLock lock(m_mutex);
     m_order_callback = callback;
+    LOG_I("tradezero_ws", "Order callback set: %s this=%p", callback ? "yes" : "null", static_cast<void*>(this));
 }
 
 void TradeZeroWebSocket::set_position_callback(TZPositionCallback callback) {
@@ -714,8 +715,8 @@ void TradeZeroWebSocket::parse_order_update(const std::string& json_str) {
         if (order_json.contains("startTime")) safe_strcpy(order.start_time, order_json["startTime"].get<std::string>().c_str(), sizeof(order.start_time));
         if (order_json.contains("lastUpdated")) safe_strcpy(order.last_updated, order_json["lastUpdated"].get<std::string>().c_str(), sizeof(order.last_updated));
 
-        LOG_I("tradezero_ws", "Order update: %s %s qty=%d status=%s",
-              order.symbol, order.side, order.order_quantity, order.order_status);
+        LOG_I("tradezero_ws", "Order update: %s %s qty=%d status=%s clientOrderId=%s",
+              order.symbol, order.side, order.order_quantity, order.order_status, order.client_order_id);
 
         // Invoke callback
         TZOrderCallback cb;
@@ -725,6 +726,9 @@ void TradeZeroWebSocket::parse_order_update(const std::string& json_str) {
         }
         if (cb && order.symbol[0] != '\0') {
             cb(order);
+        } else {
+            LOG_W("tradezero_ws", "Order callback not invoked: cb=%s symbol=%s stream=%d this=%p",
+                  cb ? "set" : "null", order.symbol, static_cast<int>(m_stream), static_cast<void*>(this));
         }
     } catch (const json::exception& e) {
         LOG_E("tradezero_ws", "Failed to parse order update: %s", e.what());

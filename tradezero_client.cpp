@@ -4,6 +4,8 @@
 #include <curl/curl.h>
 #include <cstring>
 #include <cstdio>
+#include <cctype>
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -161,6 +163,9 @@ TZResponse TradeZeroClient::make_request_internal(const char* method, const char
     }
 
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    // Auto-decompress gzip/deflate responses
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
 
     // Set HTTP method
     if (std::strcmp(method, "POST") == 0) {
@@ -456,13 +461,18 @@ std::vector<Order> TradeZeroClient::get_orders() {
 
             if (order_json.contains("orderStatus") && order_json["orderStatus"].is_string()) {
                 std::string status = order_json["orderStatus"].get<std::string>();
-                if (status == "new" || status == "Accepted") {
+                std::transform(status.begin(), status.end(), status.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                LOG_D("tradezero", "Order %s status from API: %s", order.symbol, status.c_str());
+                if (status == "new" || status == "accepted" || status == "pendingnew") {
                     order.status = OrderStatus::PENDING;
-                } else if (status == "filled" || status == "Filled") {
+                } else if (status == "filled") {
                     order.status = OrderStatus::FILLED;
-                } else if (status == "canceled" || status == "Canceled" || status == "Cancelled") {
+                } else if (status == "canceled" || status == "cancelled") {
                     order.status = OrderStatus::CANCELLED;
-                } else if (status == "PartiallyFilled" || status == "Partially Filled") {
+                } else if (status == "rejected") {
+                    order.status = OrderStatus::REJECTED;
+                } else if (status == "partiallyfilled" || status == "partially filled") {
                     order.status = OrderStatus::PARTIAL;
                 }
             }
@@ -574,29 +584,53 @@ TZResponse TradeZeroClient::place_order(const char* symbol, int quantity, const 
         return response;
     }
 
-    // Build JSON body
-    char body[512];
-    int len = std::snprintf(body, sizeof(body),
-        "{\"symbol\":\"%s\",\"quantity\":%d,\"side\":\"%s\",\"orderType\":\"%s\"",
-        symbol, quantity, side, order_type);
+    // Uppercase symbol (TradeZero API requires uppercase)
+    std::string upper_symbol(symbol);
+    std::transform(upper_symbol.begin(), upper_symbol.end(), upper_symbol.begin(), ::toupper);
 
+    // Capitalize side: "buy" -> "Buy", "sell" -> "Sell"
+    std::string cap_side(side);
+    if (!cap_side.empty()) {
+        cap_side[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(cap_side[0])));
+    }
+
+    // Capitalize orderType: "limit" -> "Limit", "market" -> "Market"
+    std::string cap_order_type(order_type);
+    if (!cap_order_type.empty()) {
+        cap_order_type[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(cap_order_type[0])));
+    }
+
+    // Generate unique clientOrderId
+    char client_order_id[64];
+    std::snprintf(client_order_id, sizeof(client_order_id), "DT-%lld",
+                  static_cast<long long>(std::time(nullptr)));
+
+    // Build JSON body per API reference
+    json j;
+    j["clientOrderId"] = client_order_id;
+    j["symbol"] = upper_symbol;
+    j["orderQuantity"] = quantity;
+    j["side"] = cap_side;
+    j["orderType"] = cap_order_type;
+    j["securityType"] = "Stock";
     if (limit_price > 0.0f) {
-        len += std::snprintf(body + len, sizeof(body) - static_cast<size_t>(len), ",\"limitPrice\":%.2f", static_cast<double>(limit_price));
+        j["limitPrice"] = limit_price;
     }
-
     if (stop_price > 0.0f) {
-        len += std::snprintf(body + len, sizeof(body) - static_cast<size_t>(len), ",\"stopPrice\":%.2f", static_cast<double>(stop_price));
+        j["stopPrice"] = stop_price;
     }
+    j["timeInForce"] = "Day";
 
-    std::snprintf(body + len, sizeof(body) - static_cast<size_t>(len), ",\"timeInForce\":\"day\"}");
+    std::string body = j.dump();
 
     char endpoint[128];
     std::snprintf(endpoint, sizeof(endpoint), "/accounts/%s/order", m_account_id);
 
     LOG_I("tradezero", "Placing order: %s %d %s @ %.2f (%s)",
           side, quantity, symbol, static_cast<double>(limit_price), order_type);
+    LOG_D("tradezero", "Order body: %s", body.c_str());
 
-    return make_request("POST", endpoint, body);
+    return make_request("POST", endpoint, body.c_str());
 }
 
 TZResponse TradeZeroClient::cancel_order(const char* client_order_id) {
