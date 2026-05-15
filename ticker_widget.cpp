@@ -10,6 +10,7 @@ TickerWidget::TickerWidget()
     : m_selected(false)
     , m_market(nullptr)
     , m_order_mgr(nullptr)
+    , m_route_getter(nullptr)
     , m_order_qty(100)
     , m_order_price(0.0f)
     , m_focus_qty(false)
@@ -40,6 +41,10 @@ void TickerWidget::set_market_data(MarketData* market) {
 
 void TickerWidget::set_order_manager(OrderManager* order_mgr) {
     m_order_mgr = order_mgr;
+}
+
+void TickerWidget::set_route_getter(RouteGetter getter) {
+    m_route_getter = getter;
 }
 
 void TickerWidget::set_symbol(const char* symbol) {
@@ -579,8 +584,9 @@ void TickerWidget::render_order_entry(float width) {
         } else if (buy_price <= 0.0f) {
             set_error("Enter price (no ask data)");
         } else {
-            LOG_I("ticker", "BUY order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(buy_price));
-            int64_t result = m_order_mgr->buy(m_symbol, m_order_qty, buy_price);
+            const char* route = m_route_getter ? m_route_getter() : nullptr;
+            LOG_I("ticker", "BUY order: %s qty=%d price=%.2f route=%s", m_symbol, m_order_qty, static_cast<double>(buy_price), route ? route : "default");
+            int64_t result = m_order_mgr->buy(m_symbol, m_order_qty, buy_price, route);
             if (result < 0) {
                 set_error(m_order_mgr->last_error());
             } else {
@@ -609,8 +615,9 @@ void TickerWidget::render_order_entry(float width) {
         } else if (sell_price <= 0.0f) {
             set_error("Enter price (no bid data)");
         } else {
-            LOG_I("ticker", "SELL order: %s qty=%d price=%.2f", m_symbol, m_order_qty, static_cast<double>(sell_price));
-            int64_t result = m_order_mgr->sell(m_symbol, m_order_qty, sell_price);
+            const char* route = m_route_getter ? m_route_getter() : nullptr;
+            LOG_I("ticker", "SELL order: %s qty=%d price=%.2f route=%s", m_symbol, m_order_qty, static_cast<double>(sell_price), route ? route : "default");
+            int64_t result = m_order_mgr->sell(m_symbol, m_order_qty, sell_price, route);
             if (result < 0) {
                 set_error(m_order_mgr->last_error());
             } else {

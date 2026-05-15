@@ -17,6 +17,7 @@ public:
     // Set dependencies
     void set_market_data(MarketData* market);
     void set_order_manager(OrderManager* order_mgr);
+    void set_route_getter(RouteGetter getter);
 
     // Set/get symbol
     void set_symbol(const char* symbol);
@@ -52,6 +53,7 @@ private:
     bool m_selected;
     MarketData* m_market;
     OrderManager* m_order_mgr;
+    RouteGetter m_route_getter;
 
     // Order entry state
     int m_order_qty;

@@ -20,12 +20,16 @@ typedef unsigned int ImU32;
 
 static const int LEVEL2_DEPTH = 10;          // Number of price levels per side
 static const int TIME_SALES_ROWS = 15;       // Number of T&S rows to display
-static const int MAX_CANDLES = 200;          // Maximum candles per chart
+static const int MAX_CANDLES = 200;          // Maximum candles per chart (display)
+static const int MAX_BACKTEST_CANDLES = 2000; // Maximum candles for backtesting (~4 trading days of 1-min)
 static const int NUM_TICKERS = 4;            // Number of ticker windows
 static const float ORDER_OFFSET = 0.05f;     // $0.05 offset for market orders
 static const int MAX_SYMBOL_LEN = 8;         // Maximum symbol length
 static const int MAX_LEVEL2_ROWS = 10;       // Max level 2 rows to display
 static const int MAX_TIME_SALES_ROWS = 20;   // Max time & sales rows to store
+
+// Callback type for getting the currently selected trading route
+typedef const char* (*RouteGetter)();
 
 // Line styles
 enum class LineStyle {

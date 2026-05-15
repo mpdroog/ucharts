@@ -8,6 +8,7 @@
 #include <ctime>
 #include <cctype>
 #include <algorithm>
+#include <map>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -629,6 +630,9 @@ void OrderManager::load_from_database() {
     if (m_db) {
         m_db->load_open_positions(m_open_positions);
         LOG_I("orders", "Loaded %zu positions from database", m_open_positions.size());
+
+        m_db->load_closed_positions(m_closed_positions);
+        LOG_I("orders", "Loaded %zu closed positions from database", m_closed_positions.size());
     }
 }
 
@@ -942,16 +946,28 @@ void OrderManager::load_tradezero_positions(const std::vector<Position>& positio
     for (const auto& tz_pos : positions) {
         Position* existing = find_position_locked(tz_pos.symbol);
         if (existing != nullptr) {
-            // Update existing position
-            existing->quantity = tz_pos.quantity;
-            existing->avg_price = tz_pos.avg_price;
-            existing->current_price = tz_pos.current_price;
+            if (tz_pos.quantity == 0) {
+                // Position was closed - remove it
+                LOG_I("tradezero", "Removing closed position from REST: %s (qty=0)",
+                      tz_pos.symbol);
+                for (auto it = m_open_positions.begin(); it != m_open_positions.end(); ++it) {
+                    if (strcasecmp(it->symbol, tz_pos.symbol) == 0) {
+                        m_open_positions.erase(it);
+                        break;
+                    }
+                }
+            } else {
+                // Update existing position
+                existing->quantity = tz_pos.quantity;
+                existing->avg_price = tz_pos.avg_price;
+                existing->current_price = tz_pos.current_price;
 
-            LOG_I("tradezero", "Updated position from REST: %s qty=%d avg=%.2f",
-                  tz_pos.symbol, tz_pos.quantity,
-                  static_cast<double>(tz_pos.avg_price));
-        } else {
-            // Add new position
+                LOG_I("tradezero", "Updated position from REST: %s qty=%d avg=%.2f",
+                      tz_pos.symbol, tz_pos.quantity,
+                      static_cast<double>(tz_pos.avg_price));
+            }
+        } else if (tz_pos.quantity > 0) {
+            // Add new position (only if qty > 0)
             m_open_positions.push_back(tz_pos);
 
             LOG_I("tradezero", "Loaded position from REST: %s qty=%d avg=%.2f",
@@ -959,9 +975,13 @@ void OrderManager::load_tradezero_positions(const std::vector<Position>& positio
                   static_cast<double>(tz_pos.avg_price));
         }
 
-        // Save to database
+        // Save to database (or delete if qty=0)
         if (m_db != nullptr && m_db->is_open()) {
-            m_db->save_position(tz_pos);
+            if (tz_pos.quantity == 0) {
+                m_db->delete_position(tz_pos.symbol);
+            } else {
+                m_db->save_position(tz_pos);
+            }
         }
     }
 }
@@ -1003,37 +1023,75 @@ void OrderManager::load_tradezero_orders(const std::vector<Order>& orders) {
     }
 }
 
-void OrderManager::load_tradezero_executions(const std::vector<ClosedPosition>& executions) {
+void OrderManager::load_tradezero_order_history(const std::vector<Order>& orders) {
     MutexLock lock(m_mutex);
 
-    // Load today's executions (closed trades) from TradeZero
-    for (const auto& exec : executions) {
-        // Check if we already have this execution (by symbol + exit_time)
-        bool already_exists = false;
-        for (const auto& existing : m_closed_positions) {
-            if (symbols_equal(existing.symbol, exec.symbol) &&
-                existing.exit_time == exec.exit_time &&
-                existing.quantity == exec.quantity) {
-                already_exists = true;
-                break;
-            }
+    // Build closed positions from filled orders
+    // Strategy: Match SELL fills with prior BUY fills by symbol
+    // This gives us entry/exit price pairs
+
+    // First, collect all filled orders by symbol
+    std::map<std::string, std::vector<const Order*>> buy_orders;
+    std::map<std::string, std::vector<const Order*>> sell_orders;
+
+    for (const auto& order : orders) {
+        if (order.status != OrderStatus::FILLED || order.executed == 0) {
+            continue;
         }
 
-        if (!already_exists) {
-            m_closed_positions.push_back(exec);
+        std::string sym(order.symbol);
+        if (order.side == OrderSide::BUY) {
+            buy_orders[sym].push_back(&order);
+        } else {
+            sell_orders[sym].push_back(&order);
+        }
+    }
 
-            LOG_I("tradezero", "Loaded execution from REST: %s qty=%d entry=%.2f exit=%.2f pnl=%.2f",
-                  exec.symbol, exec.quantity,
-                  static_cast<double>(exec.entry_price),
-                  static_cast<double>(exec.exit_price),
-                  static_cast<double>(exec.pnl_usd()));
+    // Match sells with buys to create closed positions
+    for (auto& [symbol, sells] : sell_orders) {
+        auto buy_it = buy_orders.find(symbol);
 
-            // Save to database
-            if (m_db != nullptr && m_db->is_open()) {
-                m_db->save_closed_position(exec);
+        for (const Order* sell : sells) {
+            ClosedPosition closed;
+            safe_strcpy(closed.symbol, sell->symbol, sizeof(closed.symbol));
+            closed.quantity = sell->executed;
+            closed.exit_price = sell->avg_price > 0 ? sell->avg_price : sell->price;
+            closed.exit_time = sell->created_at;
+
+            // Try to find matching buy
+            if (buy_it != buy_orders.end() && !buy_it->second.empty()) {
+                const Order* buy = buy_it->second.front();
+                closed.entry_price = buy->avg_price > 0 ? buy->avg_price : buy->price;
+                closed.entry_time = buy->created_at;
+                buy_it->second.erase(buy_it->second.begin());  // Remove used buy
+            } else {
+                // No matching buy found, use sell price as entry (break-even display)
+                closed.entry_price = closed.exit_price;
+                closed.entry_time = closed.exit_time;
+            }
+
+            // Check for duplicates
+            bool already_exists = false;
+            for (const auto& existing : m_closed_positions) {
+                if (symbols_equal(existing.symbol, closed.symbol) &&
+                    existing.exit_time == closed.exit_time &&
+                    existing.quantity == closed.quantity) {
+                    already_exists = true;
+                    break;
+                }
+            }
+
+            if (!already_exists) {
+                m_closed_positions.push_back(closed);
+
+                LOG_I("tradezero", "Loaded closed position from order history: %s qty=%d entry=%.2f exit=%.2f pnl=%.2f",
+                      closed.symbol, closed.quantity,
+                      static_cast<double>(closed.entry_price),
+                      static_cast<double>(closed.exit_price),
+                      static_cast<double>(closed.pnl_usd()));
             }
         }
     }
 
-    LOG_I("tradezero", "Loaded %zu executions from TradeZero", executions.size());
+    LOG_I("tradezero", "Loaded closed positions from %zu orders", orders.size());
 }

@@ -14,6 +14,7 @@ public:
 
     // Set order manager reference
     void set_order_manager(OrderManager* order_mgr);
+    void set_route_getter(RouteGetter getter);
 
     // Render open positions panel
     void render_open_positions(ImVec2 size);
@@ -23,6 +24,7 @@ public:
 
 private:
     OrderManager* m_order_mgr;
+    RouteGetter m_route_getter;
 
     // Helper to format P&L
     void render_pnl(float pnl, float pnl_percent);

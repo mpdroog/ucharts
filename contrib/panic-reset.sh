@@ -52,11 +52,12 @@ orders_response=$(curl -s -X GET "$BASE_URL/accounts/$TZ_ACCOUNT_ID/orders" \
 
 echo -e "${YELLOW}PENDING ORDERS:${NC}"
 if command -v jq &> /dev/null; then
-    order_count=$(echo "$orders_response" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
+    # API returns {"orders": [...]} not raw array
+    order_count=$(echo "$orders_response" | jq 'if type == "object" and .orders then .orders | length elif type == "array" then length else 0 end' 2>/dev/null || echo "0")
     if [[ "$order_count" == "0" || -z "$order_count" ]]; then
         echo "  (none)"
     else
-        echo "$orders_response" | jq -r '.[] | "  \(.side) \(.orderQuantity) \(.symbol) @ \(.limitPrice // "MKT") [\(.orderStatus)]"' 2>/dev/null
+        echo "$orders_response" | jq -r '(if type == "object" and .orders then .orders else . end) | .[] | "  \(.side) \(.orderQuantity) \(.symbol) @ \(.limitPrice // "MKT") [\(.orderStatus)]"' 2>/dev/null
     fi
 else
     echo "  (install jq for formatted output)"
@@ -72,11 +73,12 @@ positions_response=$(curl -s -X GET "$BASE_URL/accounts/$TZ_ACCOUNT_ID/positions
 
 echo -e "${YELLOW}OPEN POSITIONS:${NC}"
 if command -v jq &> /dev/null; then
-    pos_count=$(echo "$positions_response" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
+    # API returns {"positions": [...]} not raw array
+    pos_count=$(echo "$positions_response" | jq 'if type == "object" and .positions then .positions | length elif type == "array" then length else 0 end' 2>/dev/null || echo "0")
     if [[ "$pos_count" == "0" || -z "$pos_count" ]]; then
         echo "  (none)"
     else
-        echo "$positions_response" | jq -r '.[] | "  \(.symbol): \(.shares) shares @ $\(.priceAvg | tostring | .[0:6]) (current: $\(.priceClose | tostring | .[0:6]))"' 2>/dev/null
+        echo "$positions_response" | jq -r '(if type == "object" and .positions then .positions else . end) | .[] | "  \(.symbol): \(.shares) shares @ $\(.priceAvg | tostring | .[0:6]) (current: $\(.priceClose | tostring | .[0:6]))"' 2>/dev/null
     fi
 else
     echo "  (install jq for formatted output)"
@@ -118,7 +120,8 @@ echo -e "${YELLOW}[2/2] Closing positions at market...${NC}"
 
 # Parse positions using jq if available, otherwise use grep/sed
 if command -v jq &> /dev/null; then
-    symbols=$(echo "$positions_response" | jq -r '.[] | "\(.symbol):\(.shares)"' 2>/dev/null || echo "")
+    # API returns {"positions": [...]} not raw array
+    symbols=$(echo "$positions_response" | jq -r '(if type == "object" and .positions then .positions else . end) | .[] | "\(.symbol):\(.shares)"' 2>/dev/null || echo "")
 else
     echo "Warning: jq not installed, using basic parsing"
     symbols=$(echo "$positions_response" | grep -oE '"symbol":"[^"]+"|"shares":[0-9.-]+' | paste - - | sed 's/"symbol":"//g; s/"|"shares":/:/g')

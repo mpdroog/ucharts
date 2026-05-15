@@ -469,77 +469,6 @@ TEST(find_order) {
     ASSERT_TRUE(nonexistent == nullptr);
 }
 
-TEST(load_tradezero_executions) {
-    init_test_env();
-    reset_order_manager();
-
-    // Create some mock executions
-    std::vector<ClosedPosition> executions;
-
-    ClosedPosition exec1;
-    safe_strcpy(exec1.symbol, "AAPL", sizeof(exec1.symbol));
-    exec1.quantity = 100;
-    exec1.entry_price = 150.00f;
-    exec1.exit_price = 155.00f;
-    exec1.entry_time = 1700000000;
-    exec1.exit_time = 1700001000;
-    executions.push_back(exec1);
-
-    ClosedPosition exec2;
-    safe_strcpy(exec2.symbol, "MSFT", sizeof(exec2.symbol));
-    exec2.quantity = 50;
-    exec2.entry_price = 300.00f;
-    exec2.exit_price = 295.00f;
-    exec2.entry_time = 1700002000;
-    exec2.exit_time = 1700003000;
-    executions.push_back(exec2);
-
-    // Load executions
-    g_test_om.load_tradezero_executions(executions);
-
-    // Verify they were loaded
-    const auto& closed = g_test_om.get_closed_positions();
-    ASSERT_EQ(closed.size(), 2u);
-
-    // Verify first execution
-    ASSERT_STREQ(closed[0].symbol, "AAPL");
-    ASSERT_EQ(closed[0].quantity, 100);
-    ASSERT_FLOAT_EQ(closed[0].entry_price, 150.00f, 0.01f);
-    ASSERT_FLOAT_EQ(closed[0].exit_price, 155.00f, 0.01f);
-    ASSERT_FLOAT_EQ(closed[0].pnl_usd(), 500.00f, 0.01f);  // 100 * (155 - 150) = 500
-
-    // Verify second execution
-    ASSERT_STREQ(closed[1].symbol, "MSFT");
-    ASSERT_EQ(closed[1].quantity, 50);
-    ASSERT_FLOAT_EQ(closed[1].entry_price, 300.00f, 0.01f);
-    ASSERT_FLOAT_EQ(closed[1].exit_price, 295.00f, 0.01f);
-    ASSERT_FLOAT_EQ(closed[1].pnl_usd(), -250.00f, 0.01f);  // 50 * (295 - 300) = -250
-}
-
-TEST(load_tradezero_executions_deduplicates) {
-    init_test_env();
-    reset_order_manager();
-
-    // Create an execution
-    std::vector<ClosedPosition> executions;
-    ClosedPosition exec1;
-    safe_strcpy(exec1.symbol, "TEST", sizeof(exec1.symbol));
-    exec1.quantity = 100;
-    exec1.entry_price = 100.00f;
-    exec1.exit_price = 101.00f;
-    exec1.entry_time = 1700000000;
-    exec1.exit_time = 1700001000;
-    executions.push_back(exec1);
-
-    // Load it twice
-    g_test_om.load_tradezero_executions(executions);
-    g_test_om.load_tradezero_executions(executions);
-
-    // Should only have 1 (deduplication by symbol + exit_time + quantity)
-    const auto& closed = g_test_om.get_closed_positions();
-    ASSERT_EQ(closed.size(), 1u);
-}
-
 TEST(order_callback) {
     init_test_env();
     reset_order_manager();
@@ -702,8 +631,6 @@ int main(int argc, char* argv[]) {
     RUN_TEST(closed_position_pnl);
     RUN_TEST(find_position);
     RUN_TEST(find_order);
-    RUN_TEST(load_tradezero_executions);
-    RUN_TEST(load_tradezero_executions_deduplicates);
     RUN_TEST(order_callback);
     RUN_TEST(error_callback_can_be_set);
     RUN_TEST(error_callback_on_rejected_order);

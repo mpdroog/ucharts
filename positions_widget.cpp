@@ -5,11 +5,16 @@
 
 PositionsWidget::PositionsWidget()
     : m_order_mgr(nullptr)
+    , m_route_getter(nullptr)
 {
 }
 
 void PositionsWidget::set_order_manager(OrderManager* order_mgr) {
     m_order_mgr = order_mgr;
+}
+
+void PositionsWidget::set_route_getter(RouteGetter getter) {
+    m_route_getter = getter;
 }
 
 void PositionsWidget::render_pnl(float pnl, float pnl_percent) {
@@ -109,7 +114,8 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
                 // Sell entire position at market (current price - small offset)
                 const Position* p = m_order_mgr->find_position(close_symbol);
                 if (p != nullptr) {
-                    m_order_mgr->sell(close_symbol, p->quantity, p->current_price - 0.05f);
+                    const char* route = m_route_getter ? m_route_getter() : nullptr;
+                    m_order_mgr->sell(close_symbol, p->quantity, p->current_price - 0.05f, route);
                 }
             }
         }
@@ -129,8 +135,9 @@ void PositionsWidget::render_open_positions(ImVec2 size) {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, make_color(255, 0, 0, 255));
 
         if (ImGui::Button("SELL ALL (Ctrl+Shift+C)", ImVec2(size.x - 8.0f, 0))) {
+            const char* route = m_route_getter ? m_route_getter() : nullptr;
             for (const auto& pos : positions) {
-                m_order_mgr->sell_market(pos.symbol, pos.quantity);
+                m_order_mgr->sell_market(pos.symbol, pos.quantity, route);
             }
         }
 
