@@ -170,12 +170,12 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var req struct {
-		Symbol      string  `json:"symbol"`
-		Quantity    int     `json:"quantity"`
-		Side        string  `json:"side"`
-		OrderType   string  `json:"orderType"`
-		LimitPrice  float64 `json:"limitPrice"`
-		TimeInForce string  `json:"timeInForce"`
+		Symbol        string  `json:"symbol"`
+		OrderQuantity int     `json:"orderQuantity"`
+		Side          string  `json:"side"`
+		OrderType     string  `json:"orderType"`
+		LimitPrice    float64 `json:"limitPrice"`
+		TimeInForce   string  `json:"timeInForce"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -184,7 +184,7 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logInfo("REST: POST order %s %d %s @ %.2f", req.Side, req.Quantity, req.Symbol, req.LimitPrice)
+	logInfo("REST: POST order %s %d %s @ %.2f", req.Side, req.OrderQuantity, req.Symbol, req.LimitPrice)
 
 	ordersMu.Lock()
 	orderID := fmt.Sprintf("ORD%d", nextOrderID)
@@ -195,7 +195,7 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		Symbol:        req.Symbol,
 		Side:          cases.Title(language.English).String(strings.ToLower(req.Side)),
 		OrderStatus:   "Accepted",
-		OrderQuantity: req.Quantity,
+		OrderQuantity: req.OrderQuantity,
 		Executed:      0,
 		LimitPrice:    req.LimitPrice,
 		PriceAvg:      req.LimitPrice, // Fill at limit price
@@ -209,19 +209,22 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	// Simulate fill after a short delay
 	// Mock market: bid=99.95, ask=100.05
 	// Buy fills if limit >= ask, Sell fills if limit <= bid
-	go simulateFill(orderID, req.Side, req.LimitPrice, req.Quantity)
+	go simulateFill(orderID, req.Side, req.LimitPrice, req.OrderQuantity)
 
-	// Return full order object per API spec (tradezero-order.txt lines 99-111)
+	// Return full order object per API spec
 	resp := map[string]interface{}{
 		"clientOrderId":  orderID,
 		"symbol":         req.Symbol,
 		"side":           req.Side,
 		"orderType":      req.OrderType,
-		"quantity":       req.Quantity,
-		"filledQuantity": 0,
-		"averagePrice":   0.0,
-		"orderStatus":    "new",
-		"timestamp":      time.Now().Format(time.RFC3339),
+		"orderQuantity":  req.OrderQuantity,
+		"executed":       0,
+		"leavesQuantity": req.OrderQuantity,
+		"canceledQuantity": 0,
+		"priceAvg":       0.0,
+		"limitPrice":     req.LimitPrice,
+		"orderStatus":    "Accepted",
+		"startTime":      time.Now().Format(time.RFC3339),
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -236,6 +239,7 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 // simulateFill checks if an order should fill based on mock market prices
+// Supports partial fills for orders >= 100 shares
 func simulateFill(orderID, side string, limitPrice float64, qty int) {
 	// Small delay to simulate market processing
 	time.Sleep(50 * time.Millisecond)
@@ -258,36 +262,92 @@ func simulateFill(orderID, side string, limitPrice float64, qty int) {
 		return
 	}
 
-	ordersMu.Lock()
-	for i := range orders {
-		if orders[i].ClientOrderID == orderID && orders[i].OrderStatus == "Accepted" {
-			orders[i].OrderStatus = "Filled"
-			orders[i].Executed = qty
-			orders[i].PriceAvg = limitPrice
-			logInfo("REST: Order %s filled at %.2f", orderID, limitPrice)
-			broadcastEvent(orders[i])
+	// For orders >= 100 shares, simulate partial fill (60% first, then 40%)
+	if qty >= 100 {
+		firstFill := (qty * 60) / 100
+		secondFill := qty - firstFill
+		firstPrice := limitPrice
+		secondPrice := limitPrice + 0.01 // Slightly worse price for second fill
 
-			// Record execution (closed trade) for sell orders
-			// In real trading, a buy followed by a sell creates an execution
-			if side == "sell" {
-				executionsMu.Lock()
-				exec := MockExecution{
-					Symbol:     orders[i].Symbol,
-					Quantity:   qty,
-					EntryPrice: limitPrice + 0.10, // Mock: assume bought 10 cents higher
-					ExitPrice:  limitPrice,
-					EntryTime:  time.Now().Add(-1 * time.Hour).Unix(),
-					ExitTime:   time.Now().Unix(),
-					Side:       "Sell",
-				}
-				executions = append(executions, exec)
-				executionsMu.Unlock()
-				logInfo("REST: Recorded execution for %s qty=%d", orders[i].Symbol, qty)
+		// First partial fill
+		ordersMu.Lock()
+		for i := range orders {
+			if orders[i].ClientOrderID == orderID && orders[i].OrderStatus == "Accepted" {
+				orders[i].OrderStatus = "PartiallyFilled"
+				orders[i].Executed = firstFill
+				orders[i].PriceAvg = firstPrice
+				logInfo("REST: Order %s partial fill %d/%d at %.2f", orderID, firstFill, qty, firstPrice)
+				broadcastEvent(orders[i])
+				break
 			}
-			break
 		}
+		ordersMu.Unlock()
+
+		// Delay before second fill
+		time.Sleep(30 * time.Millisecond)
+
+		// Second fill (complete)
+		ordersMu.Lock()
+		for i := range orders {
+			if orders[i].ClientOrderID == orderID && orders[i].OrderStatus == "PartiallyFilled" {
+				orders[i].OrderStatus = "Filled"
+				orders[i].Executed = qty
+				// Calculate weighted average price
+				orders[i].PriceAvg = (float64(firstFill)*firstPrice + float64(secondFill)*secondPrice) / float64(qty)
+				logInfo("REST: Order %s filled remaining %d at %.2f (avg: %.4f)", orderID, secondFill, secondPrice, orders[i].PriceAvg)
+				broadcastEvent(orders[i])
+
+				// Record execution for sell orders
+				if side == "sell" {
+					executionsMu.Lock()
+					exec := MockExecution{
+						Symbol:     orders[i].Symbol,
+						Quantity:   qty,
+						EntryPrice: limitPrice + 0.10,
+						ExitPrice:  orders[i].PriceAvg,
+						EntryTime:  time.Now().Add(-1 * time.Hour).Unix(),
+						ExitTime:   time.Now().Unix(),
+						Side:       "Sell",
+					}
+					executions = append(executions, exec)
+					executionsMu.Unlock()
+					logInfo("REST: Recorded execution for %s qty=%d", orders[i].Symbol, qty)
+				}
+				break
+			}
+		}
+		ordersMu.Unlock()
+	} else {
+		// Small orders fill immediately
+		ordersMu.Lock()
+		for i := range orders {
+			if orders[i].ClientOrderID == orderID && orders[i].OrderStatus == "Accepted" {
+				orders[i].OrderStatus = "Filled"
+				orders[i].Executed = qty
+				orders[i].PriceAvg = limitPrice
+				logInfo("REST: Order %s filled at %.2f", orderID, limitPrice)
+				broadcastEvent(orders[i])
+
+				if side == "sell" {
+					executionsMu.Lock()
+					exec := MockExecution{
+						Symbol:     orders[i].Symbol,
+						Quantity:   qty,
+						EntryPrice: limitPrice + 0.10,
+						ExitPrice:  limitPrice,
+						EntryTime:  time.Now().Add(-1 * time.Hour).Unix(),
+						ExitTime:   time.Now().Unix(),
+						Side:       "Sell",
+					}
+					executions = append(executions, exec)
+					executionsMu.Unlock()
+					logInfo("REST: Recorded execution for %s qty=%d", orders[i].Symbol, qty)
+				}
+				break
+			}
+		}
+		ordersMu.Unlock()
 	}
-	ordersMu.Unlock()
 }
 
 func handleCancelOrder(w http.ResponseWriter, r *http.Request) {

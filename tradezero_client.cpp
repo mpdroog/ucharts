@@ -413,10 +413,13 @@ std::vector<Order> TradeZeroClient::get_orders() {
             order.symbol[0] = '\0';
             order.quantity = 0;
             order.price = 0.0f;
+            order.avg_price = 0.0f;
             order.side = OrderSide::BUY;
             order.status = OrderStatus::PENDING;
             order.client_order_id[0] = '\0';
-            order.filled = 0;
+            order.executed = 0;
+            order.canceled = 0;
+            order.leaves = 0;
 
             if (order_json.contains("symbol") && order_json["symbol"].is_string()) {
                 std::string symbol = order_json["symbol"].get<std::string>();
@@ -442,12 +445,24 @@ std::vector<Order> TradeZeroClient::get_orders() {
                 order.price = order_json["limitPrice"].get<float>();
             }
 
+            if (order_json.contains("priceAvg")) {
+                order.avg_price = order_json["priceAvg"].get<float>();
+            }
+
             if (order_json.contains("executed")) {
                 if (order_json["executed"].is_number_integer()) {
-                    order.filled = order_json["executed"].get<int>();
+                    order.executed = order_json["executed"].get<int>();
                 } else if (order_json["executed"].is_number_float()) {
-                    order.filled = static_cast<int>(order_json["executed"].get<float>());
+                    order.executed = static_cast<int>(order_json["executed"].get<float>());
                 }
+            }
+
+            if (order_json.contains("canceledQuantity")) {
+                order.canceled = order_json["canceledQuantity"].get<int>();
+            }
+
+            if (order_json.contains("leavesQuantity")) {
+                order.leaves = order_json["leavesQuantity"].get<int>();
             }
 
             if (order_json.contains("side") && order_json["side"].is_string()) {

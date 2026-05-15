@@ -123,8 +123,11 @@ TEST(save_and_load_order) {
     std::strcpy(order.symbol, "AAPL");
     order.side = OrderSide::BUY;
     order.quantity = 100;
-    order.filled = 0;
+    order.executed = 0;
+    order.canceled = 0;
+    order.leaves = 100;
     order.price = 150.50f;
+    order.avg_price = 0.0f;
     order.status = OrderStatus::PENDING;
     order.created_at = 1704067200;  // 2024-01-01
 
@@ -152,8 +155,11 @@ TEST(update_order_status) {
     std::strcpy(order.symbol, "AAPL");
     order.side = OrderSide::BUY;
     order.quantity = 100;
-    order.filled = 0;
+    order.executed = 0;
+    order.canceled = 0;
+    order.leaves = 100;
     order.price = 150.50f;
+    order.avg_price = 0.0f;
     order.status = OrderStatus::PENDING;
     order.created_at = 1704067200;
 
@@ -161,7 +167,9 @@ TEST(update_order_status) {
     ASSERT_TRUE(order.id > 0);
 
     // Update to filled
-    order.filled = 100;
+    order.executed = 100;
+    order.leaves = 0;
+    order.avg_price = 150.50f;
     order.status = OrderStatus::FILLED;
     ASSERT_TRUE(db.update_order(order));
 
@@ -174,7 +182,7 @@ TEST(update_order_status) {
     std::vector<Order> history;
     ASSERT_TRUE(db.load_order_history(history));
     ASSERT_EQ(history.size(), 1u);
-    ASSERT_EQ(history[0].filled, 100);
+    ASSERT_EQ(history[0].executed, 100);
     ASSERT_EQ(history[0].status, OrderStatus::FILLED);
 
     db.close();
@@ -454,8 +462,11 @@ TEST(multiple_orders_in_pending) {
         std::snprintf(order.symbol, sizeof(order.symbol), "SYM%d", i);
         order.side = (i % 2 == 0) ? OrderSide::BUY : OrderSide::SELL;
         order.quantity = 100 * (i + 1);
-        order.filled = 0;
+        order.executed = 0;
+        order.canceled = 0;
+        order.leaves = order.quantity;
         order.price = 100.0f + static_cast<float>(i);
+        order.avg_price = 0.0f;
         order.status = OrderStatus::PENDING;
         order.created_at = 1704067200 + i;
         ASSERT_TRUE(db.save_order(order) > 0);
@@ -483,8 +494,11 @@ TEST(order_history_limit) {
         std::strcpy(order.symbol, "AAPL");
         order.side = OrderSide::BUY;
         order.quantity = 100;
-        order.filled = 100;
+        order.executed = 100;
+        order.canceled = 0;
+        order.leaves = 0;
         order.price = 150.0f;
+        order.avg_price = 150.0f;
         order.status = OrderStatus::FILLED;
         order.created_at = 1704067200 + i;
         ASSERT_TRUE(db.save_order(order) > 0);

@@ -52,7 +52,7 @@ TZAggUpdate::TZAggUpdate()
       day_pnl(0), total_unrealized(0), equity_ratio(0) {}
 
 TZOrderUpdate::TZOrderUpdate()
-    : order_quantity(0), executed(0), leaves_quantity(0),
+    : order_quantity(0), executed(0), canceled_quantity(0), leaves_quantity(0),
       limit_price(0), price_avg(0), last_price(0), last_quantity(0) {
     account_id[0] = '\0';
     client_order_id[0] = '\0';
@@ -62,6 +62,7 @@ TZOrderUpdate::TZOrderUpdate()
     order_type[0] = '\0';
     start_time[0] = '\0';
     last_updated[0] = '\0';
+    text[0] = '\0';
 }
 
 TZPositionUpdate::TZPositionUpdate()
@@ -278,6 +279,12 @@ void TradeZeroWebSocket::disconnect() {
         m_thread.join();
     }
 
+    // Destroy context after thread has exited (no more racing)
+    if (m_lws_context) {
+        lws_context_destroy(m_lws_context);
+        m_lws_context = nullptr;
+    }
+
     m_connected.store(false);
     m_authenticated.store(false);
 }
@@ -404,16 +411,10 @@ void TradeZeroWebSocket::worker_thread() {
         safe_sleep_ms(10);
     }
 
-    // Clear active client BEFORE destroying context
-    // This prevents callbacks from accessing 'this' during destruction
+    // Clear active client before exiting
+    // Context destruction is handled by disconnect() after thread join
     if (g_active_ws_client == this) {
         g_active_ws_client = nullptr;
-    }
-
-    // Now safe to destroy context - callbacks will see g_active_ws_client == nullptr
-    if (m_lws_context) {
-        lws_context_destroy(m_lws_context);
-        m_lws_context = nullptr;
     }
 }
 
@@ -705,15 +706,17 @@ void TradeZeroWebSocket::parse_order_update(const std::string& json_str) {
         if (order_json.contains("side")) safe_strcpy(order.side, order_json["side"].get<std::string>().c_str(), sizeof(order.side));
         if (order_json.contains("orderStatus")) safe_strcpy(order.order_status, order_json["orderStatus"].get<std::string>().c_str(), sizeof(order.order_status));
         if (order_json.contains("orderType")) safe_strcpy(order.order_type, order_json["orderType"].get<std::string>().c_str(), sizeof(order.order_type));
-        if (order_json.contains("orderQuantity")) order.order_quantity = order_json["orderQuantity"];
-        if (order_json.contains("executed")) order.executed = order_json["executed"];
-        if (order_json.contains("leavesQuantity")) order.leaves_quantity = order_json["leavesQuantity"];
-        if (order_json.contains("limitPrice")) order.limit_price = order_json["limitPrice"];
-        if (order_json.contains("priceAvg")) order.price_avg = order_json["priceAvg"];
-        if (order_json.contains("lastPrice")) order.last_price = order_json["lastPrice"];
-        if (order_json.contains("lastQuantity")) order.last_quantity = order_json["lastQuantity"];
+        if (order_json.contains("orderQuantity")) order.order_quantity = order_json["orderQuantity"].get<int>();
+        if (order_json.contains("executed")) order.executed = order_json["executed"].get<int>();
+        if (order_json.contains("canceledQuantity")) order.canceled_quantity = order_json["canceledQuantity"].get<int>();
+        if (order_json.contains("leavesQuantity")) order.leaves_quantity = order_json["leavesQuantity"].get<int>();
+        if (order_json.contains("limitPrice")) order.limit_price = order_json["limitPrice"].get<float>();
+        if (order_json.contains("priceAvg")) order.price_avg = order_json["priceAvg"].get<float>();
+        if (order_json.contains("lastPrice")) order.last_price = order_json["lastPrice"].get<float>();
+        if (order_json.contains("lastQuantity")) order.last_quantity = order_json["lastQuantity"].get<int>();
         if (order_json.contains("startTime")) safe_strcpy(order.start_time, order_json["startTime"].get<std::string>().c_str(), sizeof(order.start_time));
         if (order_json.contains("lastUpdated")) safe_strcpy(order.last_updated, order_json["lastUpdated"].get<std::string>().c_str(), sizeof(order.last_updated));
+        if (order_json.contains("text")) safe_strcpy(order.text, order_json["text"].get<std::string>().c_str(), sizeof(order.text));
 
         LOG_I("tradezero_ws", "Order update: %s %s qty=%d status=%s clientOrderId=%s",
               order.symbol, order.side, order.order_quantity, order.order_status, order.client_order_id);

@@ -349,16 +349,22 @@ TEST(full_trading_workflow) {
     ASSERT(wait_for_pending_count(0));
 
     // Should have 100 shares remaining
+    int closed_after_first_sell = 0;
     {
         std::lock_guard<std::mutex> lock(g_om_mutex);
         Position* pos = g_test_om.find_position("TEST");
         ASSERT(pos != nullptr);
         ASSERT_EQ(pos->quantity, 100);
 
-        // Should have 1 closed position
+        // Should have closed positions totaling 50 shares
         const std::vector<ClosedPosition>& closed = g_test_om.get_closed_positions();
-        ASSERT_EQ(closed.size(), 1u);
-        ASSERT_EQ(closed[0].quantity, 50);
+        ASSERT(closed.size() >= 1u);
+        int total_closed = 0;
+        for (const auto& c : closed) {
+            total_closed += c.quantity;
+        }
+        ASSERT_EQ(total_closed, 50);
+        closed_after_first_sell = static_cast<int>(closed.size());
     }
 
     // Step 4: Sell remaining position
@@ -376,8 +382,16 @@ TEST(full_trading_workflow) {
         ASSERT(pos == nullptr);
         ASSERT(g_test_om.get_open_positions().empty());
 
-        // Should have 2 closed positions
-        ASSERT_EQ(g_test_om.get_closed_positions().size(), 2u);
+        // Should have more closed positions (partial fills may create multiple)
+        const std::vector<ClosedPosition>& closed = g_test_om.get_closed_positions();
+        ASSERT(closed.size() > static_cast<size_t>(closed_after_first_sell));
+
+        // Total closed should be 150 (50 + 100)
+        int total_closed = 0;
+        for (const auto& c : closed) {
+            total_closed += c.quantity;
+        }
+        ASSERT_EQ(total_closed, 150);
     }
 
     g_test_db.close();

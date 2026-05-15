@@ -66,8 +66,11 @@ int64_t OrderManager::buy(const char* symbol, int quantity, float price) {
                      static_cast<long long>(order.id));
         order.side = OrderSide::BUY;
         order.quantity = quantity;
-        order.filled = 0;
+        order.executed = 0;
+        order.canceled = 0;
+        order.leaves = quantity;
         order.price = price;
+        order.avg_price = 0;
         order.status = OrderStatus::PENDING;
         order.created_at = get_current_timestamp();
 
@@ -165,8 +168,11 @@ int64_t OrderManager::sell(const char* symbol, int quantity, float price) {
                      static_cast<long long>(order.id));
         order.side = OrderSide::SELL;
         order.quantity = quantity;
-        order.filled = 0;
+        order.executed = 0;
+        order.canceled = 0;
+        order.leaves = quantity;
         order.price = price;
+        order.avg_price = 0;
         order.status = OrderStatus::PENDING;
         order.created_at = get_current_timestamp();
 
@@ -392,6 +398,9 @@ void OrderManager::update_position_on_buy(const char* symbol, int quantity, floa
     // Note: Caller must hold m_mutex
     Position* pos = find_position_locked(symbol);
 
+    LOG_I("orders", "update_position_on_buy: %s qty=%d @ %.2f existing_pos=%s",
+          symbol, quantity, static_cast<double>(price), pos ? "yes" : "no");
+
     if (pos != nullptr) {
         // Update existing position with weighted average price
         float total_cost = (pos->avg_price * static_cast<float>(pos->quantity)) +
@@ -430,7 +439,12 @@ void OrderManager::update_position_on_buy(const char* symbol, int quantity, floa
 void OrderManager::update_position_on_sell(const char* symbol, int quantity, float price) {
     // Note: Caller must hold m_mutex
     Position* pos = find_position_locked(symbol);
-    if (pos == nullptr) return;
+    if (pos == nullptr) {
+        LOG_W("orders", "update_position_on_sell: No position found for %s", symbol);
+        return;
+    }
+    LOG_I("orders", "Closing %d shares of %s @ %.2f (pos qty=%d avg=%.2f)",
+          quantity, symbol, static_cast<double>(price), pos->quantity, static_cast<double>(pos->avg_price));
 
     // Record closed position
     ClosedPosition closed;
@@ -492,10 +506,23 @@ void OrderManager::set_error_callback(OrderErrorCallback cb) {
 
 void OrderManager::load_from_database() {
     // Orders come from TradeZero API (source of truth), not local database
+    // But positions are persisted locally for session continuity
+    if (m_db) {
+        m_db->load_open_positions(m_open_positions);
+        LOG_I("orders", "Loaded %zu positions from database", m_open_positions.size());
+    }
 }
 
 void OrderManager::save_to_database() {
     // Orders come from TradeZero API (source of truth), not local database
+    // But positions are persisted locally for session continuity
+    if (!m_db) return;
+
+    // Save all open positions
+    for (const auto& pos : m_open_positions) {
+        m_db->save_position(pos);
+    }
+    LOG_I("orders", "Saved %zu positions to database", m_open_positions.size());
 }
 
 // ============================================================================
@@ -527,6 +554,7 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
     MutexLock lock(m_mutex);
 
     bool was_rejected = false;  // Track if order was rejected (for error callback)
+    int new_fills = 0;          // New fills since last update
 
     // Find order by client_order_id
     Order* order = find_order_by_client_id_locked(update.client_order_id);
@@ -565,8 +593,11 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
         safe_strcpy(new_order.client_order_id, update.client_order_id, sizeof(new_order.client_order_id));
         new_order.side = (std::strcmp(update.side, "Buy") == 0) ? OrderSide::BUY : OrderSide::SELL;
         new_order.quantity = update.order_quantity;
-        new_order.filled = update.executed;
-        new_order.price = update.price_avg > 0 ? update.price_avg : update.limit_price;
+        new_order.executed = update.executed;
+        new_order.canceled = update.canceled_quantity;
+        new_order.leaves = update.leaves_quantity;
+        new_order.price = update.limit_price;
+        new_order.avg_price = update.price_avg;
         new_order.created_at = get_current_timestamp();
 
         // Parse order status (case-insensitive)
@@ -574,79 +605,100 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
         std::transform(status_str.begin(), status_str.end(), status_str.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
+        // Trust API status completely
         if (status_str == "filled") {
             new_order.status = OrderStatus::FILLED;
+        } else if (status_str == "partiallyfilled") {
+            new_order.status = OrderStatus::PARTIAL;
         } else if (status_str == "canceled" || status_str == "cancelled") {
             new_order.status = OrderStatus::CANCELLED;
         } else if (status_str == "rejected") {
             new_order.status = OrderStatus::REJECTED;
             was_rejected = true;
-            LOG_W("orders", "New order REJECTED: %s %s qty=%d",
-                  update.side, update.symbol, update.order_quantity);
-        } else if (update.executed > 0 && update.executed < update.order_quantity) {
-            new_order.status = OrderStatus::PARTIAL;
+            LOG_W("orders", "New order REJECTED: %s %s qty=%d text=%s",
+                  update.side, update.symbol, update.order_quantity, update.text);
         } else {
+            // Pending, Accepted, PendingNew, etc.
             new_order.status = OrderStatus::PENDING;
         }
 
         m_pending_orders.push_back(new_order);
         order = &m_pending_orders.back();
 
-        LOG_I("orders", "New order from TradeZero: %s %s %d @ %.2f status=%s",
+        // For new orders that already have fills, process them
+        new_fills = update.executed;
+
+        LOG_I("orders", "New order from TradeZero: %s %s qty=%d exec=%d leaves=%d status=%s",
               update.side, update.symbol, update.order_quantity,
-              static_cast<double>(update.limit_price), update.order_status);
+              update.executed, update.leaves_quantity, update.order_status);
     } else {
-        // Update existing order
-        order->filled = update.executed;
-        order->price = update.price_avg > 0 ? update.price_avg : update.limit_price;
+        // Calculate new fills since last update
+        new_fills = update.executed - order->executed;
+
+        // Update order fields from API
+        order->executed = update.executed;
+        order->canceled = update.canceled_quantity;
+        order->leaves = update.leaves_quantity;
+        if (update.price_avg > 0) {
+            order->avg_price = update.price_avg;
+        }
+
+        // Validate API invariant: quantity == executed + canceled + leaves
+        int sum = order->executed + order->canceled + order->leaves;
+        if (order->quantity != sum) {
+            LOG_E("orders", "API invariant broken for order %s: total quantity (%d) should equal executed (%d) + canceled (%d) + leaves (%d) = %d",
+                  update.symbol, order->quantity, order->executed, order->canceled, order->leaves, sum);
+        }
 
         // Parse order status (case-insensitive)
         std::string status_str(update.order_status);
         std::transform(status_str.begin(), status_str.end(), status_str.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
+        // Trust API status completely
         if (status_str == "filled") {
             order->status = OrderStatus::FILLED;
+        } else if (status_str == "partiallyfilled") {
+            order->status = OrderStatus::PARTIAL;
         } else if (status_str == "canceled" || status_str == "cancelled") {
             order->status = OrderStatus::CANCELLED;
         } else if (status_str == "rejected") {
             order->status = OrderStatus::REJECTED;
             was_rejected = true;
-            LOG_W("orders", "Order REJECTED: %s %s qty=%d - %s",
-                  update.side, update.symbol, update.order_quantity, update.order_status);
-        } else if (update.executed > 0 && update.executed < update.order_quantity) {
-            order->status = OrderStatus::PARTIAL;
+            LOG_W("orders", "Order REJECTED: %s %s qty=%d text=%s",
+                  update.side, update.symbol, update.order_quantity, update.text);
         } else {
+            // Pending, Accepted, PendingNew, etc.
             order->status = OrderStatus::PENDING;
         }
 
-        LOG_I("orders", "Order updated: id=%lld %s status=%s filled=%d/%d",
+        LOG_I("orders", "Order updated: id=%lld %s status=%s exec=%d leaves=%d canceled=%d new_fills=%d",
               static_cast<long long>(order->id), order->symbol,
-              update.order_status, order->filled, order->quantity);
+              update.order_status, update.executed, update.leaves_quantity, update.canceled_quantity, new_fills);
+    }
+
+    // Process new fills into positions (for both PARTIAL and FILLED)
+    if (new_fills > 0) {
+        float fill_price = (update.price_avg > 0) ? update.price_avg : update.limit_price;
+
+        LOG_I("orders", "Processing %d new fills for %s @ %.2f",
+              new_fills, order->symbol, static_cast<double>(fill_price));
+
+        if (order->side == OrderSide::BUY) {
+            update_position_on_buy(order->symbol, new_fills, fill_price);
+        } else {
+            update_position_on_sell(order->symbol, new_fills, fill_price);
+        }
     }
 
     // Copy order for callback (before potential erase that would invalidate pointer)
     Order order_copy = *order;
 
-    // Handle filled orders
-    if (order->status == OrderStatus::FILLED) {
-        int fill_qty = order->quantity;
-        float fill_price = order->price;
+    // Remove from pending when order is complete
+    if (order->status == OrderStatus::FILLED ||
+        order->status == OrderStatus::CANCELLED ||
+        order->status == OrderStatus::REJECTED) {
 
-        if (order->side == OrderSide::BUY) {
-            update_position_on_buy(order->symbol, fill_qty, fill_price);
-        } else {
-            update_position_on_sell(order->symbol, fill_qty, fill_price);
-        }
-
-        // Remove from pending orders
-        for (auto it = m_pending_orders.begin(); it != m_pending_orders.end(); ++it) {
-            if (std::strcmp(it->client_order_id, update.client_order_id) == 0) {
-                m_pending_orders.erase(it);
-                break;
-            }
-        }
-    } else if (order->status == OrderStatus::CANCELLED || order->status == OrderStatus::REJECTED) {
         // Add rejected orders to closed positions for visibility
         if (was_rejected || order->status == OrderStatus::REJECTED) {
             ClosedPosition rejected;
@@ -670,7 +722,8 @@ void OrderManager::on_tradezero_order_update(const TZOrderUpdate& update) {
 
         // Notify error callback for rejected orders
         if (was_rejected && m_error_callback) {
-            m_error_callback(update.symbol, "Order rejected by broker");
+            const char* reason = (update.text[0] != '\0') ? update.text : "Order rejected";
+            m_error_callback(update.symbol, reason);
         }
     }
 

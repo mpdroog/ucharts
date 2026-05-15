@@ -78,14 +78,16 @@ struct TZOrderUpdate {
     char order_status[32];          // orderStatus ("Filled", "Canceled", "Accepted", etc.)
     char order_type[16];            // orderType ("Limit", "Market", etc.)
     int order_quantity;             // orderQuantity
-    int executed;                   // executed
-    int leaves_quantity;            // leavesQuantity
+    int executed;                   // executed (shares filled)
+    int canceled_quantity;          // canceledQuantity (shares canceled)
+    int leaves_quantity;            // leavesQuantity (shares remaining)
     float limit_price;              // limitPrice
     float price_avg;                // priceAvg
     float last_price;               // lastPrice
     int last_quantity;              // lastQuantity
     char start_time[32];            // startTime (ISO 8601)
     char last_updated[32];          // lastUpdated (ISO 8601)
+    char text[128];                 // text (error messages, rejection reasons)
 
     TZOrderUpdate();
 };

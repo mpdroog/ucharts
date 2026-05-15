@@ -80,10 +80,14 @@ bool Database::create_tables() {
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol TEXT NOT NULL,
+            client_order_id TEXT NOT NULL DEFAULT '',
             side TEXT NOT NULL,
             quantity INTEGER NOT NULL,
-            filled INTEGER NOT NULL DEFAULT 0,
+            executed INTEGER NOT NULL DEFAULT 0,
+            canceled INTEGER NOT NULL DEFAULT 0,
+            leaves INTEGER NOT NULL DEFAULT 0,
             price REAL NOT NULL,
+            avg_price REAL NOT NULL DEFAULT 0,
             status TEXT NOT NULL,
             created_at INTEGER NOT NULL
         )
@@ -238,8 +242,8 @@ int64_t Database::save_order(const Order& order) {
 
     sqlite3_stmt* stmt = nullptr;
     const char* sql = R"(
-        INSERT INTO orders (symbol, side, quantity, filled, price, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO orders (symbol, client_order_id, side, quantity, executed, canceled, leaves, price, avg_price, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     )";
 
     if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -252,12 +256,16 @@ int64_t Database::save_order(const Order& order) {
     char status_str[2] = {static_cast<char>(order.status), '\0'};
 
     sqlite3_bind_text(stmt, 1, order.symbol, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, side_str, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 3, order.quantity);
-    sqlite3_bind_int(stmt, 4, order.filled);
-    sqlite3_bind_double(stmt, 5, static_cast<double>(order.price));
-    sqlite3_bind_text(stmt, 6, status_str, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 7, order.created_at);
+    sqlite3_bind_text(stmt, 2, order.client_order_id, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, side_str, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, order.quantity);
+    sqlite3_bind_int(stmt, 5, order.executed);
+    sqlite3_bind_int(stmt, 6, order.canceled);
+    sqlite3_bind_int(stmt, 7, order.leaves);
+    sqlite3_bind_double(stmt, 8, static_cast<double>(order.price));
+    sqlite3_bind_double(stmt, 9, static_cast<double>(order.avg_price));
+    sqlite3_bind_text(stmt, 10, status_str, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 11, order.created_at);
 
     int64_t result = -1;
     if (sqlite3_step(stmt) == SQLITE_DONE) {
@@ -275,7 +283,7 @@ bool Database::update_order(const Order& order) {
     if (m_db == nullptr) return false;
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "UPDATE orders SET filled = ?, status = ? WHERE id = ?";
+    const char* sql = "UPDATE orders SET executed = ?, canceled = ?, leaves = ?, avg_price = ?, status = ? WHERE id = ?";
 
     if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), sql, -1, &stmt, nullptr) != SQLITE_OK) {
         std::snprintf(m_error, sizeof(m_error), "Prepare failed: %s",
@@ -285,9 +293,12 @@ bool Database::update_order(const Order& order) {
 
     char status_str[2] = {static_cast<char>(order.status), '\0'};
 
-    sqlite3_bind_int(stmt, 1, order.filled);
-    sqlite3_bind_text(stmt, 2, status_str, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 3, order.id);
+    sqlite3_bind_int(stmt, 1, order.executed);
+    sqlite3_bind_int(stmt, 2, order.canceled);
+    sqlite3_bind_int(stmt, 3, order.leaves);
+    sqlite3_bind_double(stmt, 4, static_cast<double>(order.avg_price));
+    sqlite3_bind_text(stmt, 5, status_str, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 6, order.id);
 
     bool success = (sqlite3_step(stmt) == SQLITE_DONE);
     if (!success) {
@@ -305,7 +316,7 @@ bool Database::load_pending_orders(std::vector<Order>& orders) {
     orders.clear();
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT id, symbol, side, quantity, filled, price, status, created_at "
+    const char* sql = "SELECT id, symbol, client_order_id, side, quantity, executed, canceled, leaves, price, avg_price, status, created_at "
                       "FROM orders WHERE status IN ('P', 'A') ORDER BY created_at DESC";
 
     if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -318,21 +329,29 @@ bool Database::load_pending_orders(std::vector<Order>& orders) {
         Order order;
         order.id = sqlite3_column_int64(stmt, 0);
         safe_strcpy(order.symbol, reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)), sizeof(order.symbol));
-        const char* side = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        const char* client_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        if (client_id) {
+            safe_strcpy(order.client_order_id, client_id, sizeof(order.client_order_id));
+        }
+        const char* side = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         order.side = (side && side[0] == 'S') ? OrderSide::SELL : OrderSide::BUY;
-        order.quantity = sqlite3_column_int(stmt, 3);
-        order.filled = sqlite3_column_int(stmt, 4);
-        order.price = static_cast<float>(sqlite3_column_double(stmt, 5));
-        const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+        order.quantity = sqlite3_column_int(stmt, 4);
+        order.executed = sqlite3_column_int(stmt, 5);
+        order.canceled = sqlite3_column_int(stmt, 6);
+        order.leaves = sqlite3_column_int(stmt, 7);
+        order.price = static_cast<float>(sqlite3_column_double(stmt, 8));
+        order.avg_price = static_cast<float>(sqlite3_column_double(stmt, 9));
+        const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 10));
         if (status) {
             switch (status[0]) {
                 case 'F': order.status = OrderStatus::FILLED; break;
                 case 'A': order.status = OrderStatus::PARTIAL; break;
                 case 'X': order.status = OrderStatus::CANCELLED; break;
+                case 'R': order.status = OrderStatus::REJECTED; break;
                 default: order.status = OrderStatus::PENDING; break;
             }
         }
-        order.created_at = sqlite3_column_int64(stmt, 7);
+        order.created_at = sqlite3_column_int64(stmt, 11);
         orders.push_back(order);
     }
 
@@ -346,7 +365,7 @@ bool Database::load_order_history(std::vector<Order>& orders, int limit) {
     orders.clear();
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT id, symbol, side, quantity, filled, price, status, created_at "
+    const char* sql = "SELECT id, symbol, client_order_id, side, quantity, executed, canceled, leaves, price, avg_price, status, created_at "
                       "FROM orders ORDER BY created_at DESC LIMIT ?";
 
     if (sqlite3_prepare_v2(static_cast<sqlite3*>(m_db), sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -361,21 +380,29 @@ bool Database::load_order_history(std::vector<Order>& orders, int limit) {
         Order order;
         order.id = sqlite3_column_int64(stmt, 0);
         safe_strcpy(order.symbol, reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)), sizeof(order.symbol));
-        const char* side = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        const char* client_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        if (client_id) {
+            safe_strcpy(order.client_order_id, client_id, sizeof(order.client_order_id));
+        }
+        const char* side = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         order.side = (side && side[0] == 'S') ? OrderSide::SELL : OrderSide::BUY;
-        order.quantity = sqlite3_column_int(stmt, 3);
-        order.filled = sqlite3_column_int(stmt, 4);
-        order.price = static_cast<float>(sqlite3_column_double(stmt, 5));
-        const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+        order.quantity = sqlite3_column_int(stmt, 4);
+        order.executed = sqlite3_column_int(stmt, 5);
+        order.canceled = sqlite3_column_int(stmt, 6);
+        order.leaves = sqlite3_column_int(stmt, 7);
+        order.price = static_cast<float>(sqlite3_column_double(stmt, 8));
+        order.avg_price = static_cast<float>(sqlite3_column_double(stmt, 9));
+        const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 10));
         if (status) {
             switch (status[0]) {
                 case 'F': order.status = OrderStatus::FILLED; break;
                 case 'A': order.status = OrderStatus::PARTIAL; break;
                 case 'X': order.status = OrderStatus::CANCELLED; break;
+                case 'R': order.status = OrderStatus::REJECTED; break;
                 default: order.status = OrderStatus::PENDING; break;
             }
         }
-        order.created_at = sqlite3_column_int64(stmt, 7);
+        order.created_at = sqlite3_column_int64(stmt, 11);
         orders.push_back(order);
     }
 

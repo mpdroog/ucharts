@@ -115,20 +115,23 @@ struct Order {
     char symbol[8];
     char client_order_id[64];  // TradeZero client order ID
     OrderSide side;
-    int quantity;
-    int filled;
-    float price;
+    int quantity;              // Total order quantity
+    int executed;              // Shares filled (from API)
+    int canceled;              // Shares canceled (from API)
+    int leaves;                // Shares remaining (from API)
+    float price;               // Limit price
+    float avg_price;           // Average execution price (from API)
     OrderStatus status;
-    int64_t created_at;   // Unix timestamp
+    int64_t created_at;        // Unix timestamp
 
-    Order() : id(0), side(OrderSide::BUY), quantity(0), filled(0),
-              price(0), status(OrderStatus::PENDING), created_at(0) {
+    Order() : id(0), side(OrderSide::BUY), quantity(0), executed(0),
+              canceled(0), leaves(0), price(0), avg_price(0),
+              status(OrderStatus::PENDING), created_at(0) {
         symbol[0] = '\0';
         client_order_id[0] = '\0';
     }
 
-    int pending_qty() const { return quantity - filled; }
-    bool is_complete() const { return filled >= quantity || status == OrderStatus::CANCELLED; }
+    bool is_complete() const { return leaves == 0 || status == OrderStatus::CANCELLED || status == OrderStatus::REJECTED; }
 };
 
 // Open position
