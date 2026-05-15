@@ -110,6 +110,28 @@ float TickerWidget::get_best_ask() const {
     return m_best_ask;
 }
 
+void TickerWidget::clear_market_data() {
+    // Clear L2 data
+    m_bids.clear();
+    m_asks.clear();
+
+    // Clear T&S data
+    m_time_sales.clear();
+    m_prev_last = 0.0f;
+
+    // Clear L1 data
+    m_best_bid = 0.0f;
+    m_best_ask = 0.0f;
+    m_last = 0.0f;
+    m_last_size = 0;
+    m_high = 0.0f;
+    m_low = 0.0f;
+    m_open = 0.0f;
+    m_close = 0.0f;
+    m_volume = 0;
+    m_last_time[0] = '\0';
+}
+
 void TickerWidget::update_market_data() {
     if (m_market == nullptr || m_symbol[0] == '\0') {
         m_bids.clear();
@@ -302,8 +324,33 @@ bool TickerWidget::render(ImVec2 size) {
             }
             if (ImGui::InputText("##SymbolEdit", m_symbol_input, sizeof(m_symbol_input),
                                  ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
-                // Enter pressed - validate and accept
-                if (validate_symbol(m_symbol_input)) {
+                // Enter pressed - check for empty (clear) or validate symbol
+                if (m_symbol_input[0] == '\0') {
+                    // Empty input - clear the ticker completely
+                    LOG_I("ticker", "Clearing ticker (was: %s)", m_symbol);
+
+                    // Unwatch old symbol's L1/L2 if we had one
+                    if (m_symbol[0] != '\0' && m_market != nullptr) {
+                        if (!m_market->unsubscribe_quotes(m_symbol)) {
+                            LOG_W("ticker", "Failed to unsubscribe quotes for %s", m_symbol);
+                        }
+                    }
+
+                    // Clear symbol
+                    m_symbol[0] = '\0';
+
+                    // Clear all market data
+                    clear_market_data();
+
+                    // Clear order entry fields
+                    m_order_qty = 100;
+                    m_order_price = 0.0f;
+                    m_qty_input[0] = '\0';
+                    m_price_input[0] = '\0';
+
+                    m_error_msg[0] = '\0';
+                    m_editing_symbol = false;
+                } else if (validate_symbol(m_symbol_input)) {
                     // Start async load of symbol data
                     LOG_D("ticker", "Starting async load for symbol: %s", m_symbol_input);
                     bool started = true;
@@ -312,6 +359,10 @@ bool TickerWidget::render(ImVec2 size) {
                     }
                     if (started) {
                         LOG_I("ticker", "Async load started for: %s", m_symbol_input);
+
+                        // Clear old market data before setting new symbol
+                        clear_market_data();
+
                         safe_strcpy(m_symbol, m_symbol_input, sizeof(m_symbol));
                         m_error_msg[0] = '\0';
                         m_editing_symbol = false;

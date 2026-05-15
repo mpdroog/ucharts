@@ -94,6 +94,7 @@ private:
     void update_market_data();
     void update_time_sales_from_l1();
     bool validate_symbol(const char* symbol);
+    void clear_market_data();  // Clear L2, T&S, and L1 cached data
 };
 
 #endif // TICKER_WIDGET_H
