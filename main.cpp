@@ -835,19 +835,15 @@ int main(int argc, char** argv) {
         get_tradezero_pnl().set_order_callback(order_callback);
         get_tradezero_pnl().set_position_callback(position_callback);
 
-        // Connection status toasts for user awareness
+        // Connection status toasts for user awareness (only show disconnects)
         get_tradezero_portfolio().set_connection_callback([](bool connected) {
-            if (connected) {
-                get_toast_manager().success("TradeZero Portfolio connected");
-            } else {
+            if (!connected) {
                 get_toast_manager().warning("TradeZero Portfolio disconnected");
             }
         });
 
         get_tradezero_pnl().set_connection_callback([](bool connected) {
-            if (connected) {
-                get_toast_manager().success("TradeZero P&L connected");
-            } else {
+            if (!connected) {
                 get_toast_manager().warning("TradeZero P&L disconnected");
             }
         });
