@@ -13,7 +13,8 @@ ChartWidget::ChartWidget()
       m_dragging_hline(-1), m_dragging_trendline(-1), m_dragging_trendline_point(-1),
       m_trendline_drawing(false), m_trendline_start_candle(-1.0f), m_trendline_start_price(0),
       m_auto_ma_period(9), m_auto_ma_is_ema(true),
-      m_indicators_dirty(true), m_daily_candles(nullptr), m_sr_dirty(true), m_prev_daily_size(0) {
+      m_indicators_dirty(true), m_daily_candles(nullptr), m_sr_dirty(true), m_prev_daily_size(0),
+      m_sr_levels(nullptr), m_entry_signals(nullptr) {
 }
 
 void ChartWidget::set_symbol(const char* symbol) {
@@ -55,6 +56,18 @@ void ChartWidget::set_current_price(float price) {
 void ChartWidget::set_drawings(std::vector<HLine>* hlines, std::vector<TrendLine>* trendlines) {
     m_hlines = hlines;
     m_trendlines = trendlines;
+}
+
+void ChartWidget::set_entry_signals(const std::vector<EntrySignal>* signals) {
+    m_entry_signals = signals;
+}
+
+void ChartWidget::clear_entry_signals() {
+    m_entry_signals = nullptr;
+}
+
+void ChartWidget::set_sr_levels(const std::vector<SRLevel>* levels) {
+    m_sr_levels = levels;
 }
 
 void ChartWidget::set_indicator_settings(IndicatorSettings* settings) {
@@ -1159,9 +1172,44 @@ bool ChartWidget::render(ImVec2 size) {
     }
 
     // Draw automatic support/resistance levels (from daily candles, shown on all timeframes)
-    if (!m_auto_sr_levels.empty()) {
-        ImU32 resistance_color = make_color(180, 80, 80, 180);   // Red-ish
-        ImU32 support_color = make_color(80, 180, 80, 180);      // Green-ish
+    // This is the legacy method - prefer m_sr_levels if set (multi-timeframe)
+    if (m_sr_levels != nullptr && !m_sr_levels->empty()) {
+        // Use multi-timeframe S/R levels
+        ImU32 daily_resistance_color = make_color(220, 80, 80, 200);   // Brighter red for daily
+        ImU32 daily_support_color = make_color(80, 220, 80, 200);      // Brighter green for daily
+        ImU32 m5_resistance_color = make_color(180, 100, 100, 150);    // Dimmer red for 5-min
+        ImU32 m5_support_color = make_color(100, 180, 100, 150);       // Dimmer green for 5-min
+
+        for (const SRLevel& level : *m_sr_levels) {
+            float y = priceToY(level.price);
+            if (y >= chart_pos.y + padding_top && y <= chart_pos.y + main_chart_height - padding_top) {
+                bool is_daily = level.is_daily();
+                ImU32 color = level.is_resistance() ?
+                    (is_daily ? daily_resistance_color : m5_resistance_color) :
+                    (is_daily ? daily_support_color : m5_support_color);
+
+                // Daily levels: dashed, thicker (2px)
+                // 5-min levels: dotted, thinner (1px)
+                float thickness = is_daily ? 2.0f : 1.0f;
+                float dash_size = is_daily ? 8.0f : 4.0f;
+
+                draw_dashed_line(draw_list,
+                    ImVec2(chart_pos.x + padding_left, y),
+                    ImVec2(chart_pos.x + canvas_size.x - padding_right, y),
+                    color, thickness, dash_size);
+
+                // Draw price label (only for daily levels to reduce clutter)
+                if (is_daily) {
+                    char label[32];
+                    std::snprintf(label, sizeof(label), "%.2f", static_cast<double>(level.price));
+                    draw_list->AddText(ImVec2(chart_pos.x + padding_left + 5, y - 12), color, label);
+                }
+            }
+        }
+    } else if (!m_auto_sr_levels.empty()) {
+        // Fallback to legacy auto S/R levels
+        ImU32 resistance_color = make_color(180, 80, 80, 180);
+        ImU32 support_color = make_color(80, 180, 80, 180);
 
         for (const AutoSRLevel& level : m_auto_sr_levels) {
             float y = priceToY(level.price);
@@ -1172,10 +1220,25 @@ bool ChartWidget::render(ImVec2 size) {
                     ImVec2(chart_pos.x + canvas_size.x - padding_right, y),
                     color, 1.0f, 6.0f);
 
-                // Draw price label
                 char label[32];
                 std::snprintf(label, sizeof(label), "%.2f", static_cast<double>(level.price));
                 draw_list->AddText(ImVec2(chart_pos.x + padding_left + 5, y - 12), color, label);
+            }
+        }
+    }
+
+    // Draw entry signal markers (fireworks!)
+    if (m_entry_signals != nullptr && !m_entry_signals->empty()) {
+        for (const EntrySignal& signal : *m_entry_signals) {
+            if (!signal.is_valid) continue;
+            if (signal.candle_idx < start_idx || signal.candle_idx >= end_idx) continue;
+
+            float x = candleToX(static_cast<float>(signal.candle_idx));
+            float y = priceToY(signal.entry_price);
+
+            // Check if marker is within visible area
+            if (y >= chart_pos.y + padding_top && y <= chart_pos.y + main_chart_height - padding_top) {
+                draw_signal_marker(draw_list, ImVec2(x, y), signal.is_long(), signal.risk_reward);
             }
         }
     }
@@ -1549,4 +1612,63 @@ bool ChartWidget::render(ImVec2 size) {
     }
 
     return double_clicked;
+}
+
+void ChartWidget::draw_signal_marker(ImDrawList* dl, ImVec2 center, bool is_long, float rr) {
+    // "Fireworks" signal marker
+    ImU32 main_color = is_long ? make_color(50, 255, 50) : make_color(255, 50, 50);
+    ImU32 sparkle_color = make_color(255, 255, 100, 200);  // Yellow sparkles
+
+    float size = 10.0f;
+
+    // Main triangle (pointing up for long, down for short)
+    ImVec2 p1, p2, p3;
+    if (is_long) {
+        p1 = ImVec2(center.x, center.y - size);           // Top point
+        p2 = ImVec2(center.x - size, center.y + size);    // Bottom-left
+        p3 = ImVec2(center.x + size, center.y + size);    // Bottom-right
+    } else {
+        p1 = ImVec2(center.x, center.y + size);           // Bottom point
+        p2 = ImVec2(center.x - size, center.y - size);    // Top-left
+        p3 = ImVec2(center.x + size, center.y - size);    // Top-right
+    }
+    dl->AddTriangleFilled(p1, p2, p3, main_color);
+    dl->AddTriangle(p1, p2, p3, make_color(255, 255, 255, 200), 1.5f);  // White outline
+
+    // Sparkle lines (fireworks effect) - 8 rays
+    float spark_inner = size * 1.2f;
+    float spark_outer = size * 2.0f;
+    for (int i = 0; i < 8; i++) {
+        float angle = static_cast<float>(i) * 3.14159f / 4.0f;
+        float cos_a = std::cos(angle);
+        float sin_a = std::sin(angle);
+        dl->AddLine(
+            ImVec2(center.x + cos_a * spark_inner, center.y + sin_a * spark_inner),
+            ImVec2(center.x + cos_a * spark_outer, center.y + sin_a * spark_outer),
+            sparkle_color, 1.5f);
+    }
+
+    // R:R label
+    char label[16];
+    std::snprintf(label, sizeof(label), "R:R %.1f", static_cast<double>(rr));
+    ImVec2 text_size = ImGui::CalcTextSize(label);
+
+    // Position label above for long, below for short
+    float label_y = is_long ? (center.y - size - 18) : (center.y + size + 5);
+    float label_x = center.x - text_size.x / 2;
+
+    // Background for label
+    dl->AddRectFilled(
+        ImVec2(label_x - 3, label_y - 1),
+        ImVec2(label_x + text_size.x + 3, label_y + text_size.y + 1),
+        make_color(30, 30, 35, 220));
+    dl->AddText(ImVec2(label_x, label_y), main_color, label);
+}
+
+void ChartWidget::draw_multi_tf_sr_levels(ImDrawList* /* dl */, float /* chart_x */, float /* chart_width */,
+                                           float /* padding_left */, float /* padding_right */,
+                                           const std::function<float(float)>& /* priceToY */,
+                                           float /* padding_top */, float /* main_chart_height */) {
+    // This function is now integrated directly into render() for simplicity
+    // Kept as a stub for future refactoring if needed
 }

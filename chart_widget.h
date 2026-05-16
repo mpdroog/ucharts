@@ -4,8 +4,11 @@
 
 #include "imgui.h"
 #include "types.h"
+#include "signal_detector.h"  // For EntrySignal
+#include "sr_calculator.h"    // For SRLevel
 #include <vector>
 #include <string>
+#include <functional>
 
 // Drawing mode
 enum class ChartDrawMode {
@@ -35,6 +38,13 @@ public:
 
     // Set drawing state (shared across charts)
     void set_drawings(std::vector<HLine>* hlines, std::vector<TrendLine>* trendlines);
+
+    // Signal markers (entry signals with fireworks display)
+    void set_entry_signals(const std::vector<EntrySignal>* signals);
+    void clear_entry_signals();
+
+    // Multi-timeframe S/R levels (from sr_calculator)
+    void set_sr_levels(const std::vector<SRLevel>* levels);
 
     // Indicator settings
     void set_indicator_settings(IndicatorSettings* settings);
@@ -107,6 +117,12 @@ private:
     bool m_sr_dirty;
     size_t m_prev_daily_size;  // Track size changes to avoid recalc every frame
 
+    // Multi-timeframe S/R levels (from sr_calculator, includes daily + 5-min)
+    const std::vector<SRLevel>* m_sr_levels;
+
+    // Entry signal markers (fireworks display)
+    const std::vector<EntrySignal>* m_entry_signals;
+
     // Helper functions
     void calculate_auto_sr();
     static MarketSession get_session_from_timestamp(const char* timestamp);
@@ -120,6 +136,9 @@ private:
 
     void draw_dashed_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 color, float thickness, float dash_size);
     void draw_styled_line(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 color, float thickness, LineStyle style);
+    void draw_signal_marker(ImDrawList* dl, ImVec2 center, bool is_long, float rr);
+    void draw_multi_tf_sr_levels(ImDrawList* dl, float chart_x, float chart_width, float padding_left, float padding_right,
+                                  const std::function<float(float)>& priceToY, float padding_top, float main_chart_height);
 };
 
 // Helper to create color without C-style casts

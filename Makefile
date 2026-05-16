@@ -88,7 +88,7 @@ CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 IMGUI_CXXFLAGS += -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 
 # Main sources
-MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp toast.cpp
+MAIN_SRCS = main.cpp database.cpp market_data.cpp order_manager.cpp chart_widget.cpp ticker_widget.cpp positions_widget.cpp http_client.cpp json_parser.cpp iqfeed_tcp.cpp tradezero_client.cpp tradezero_websocket.cpp toast.cpp sr_calculator.cpp signal_detector.cpp
 MAIN_OBJS = $(MAIN_SRCS:.cpp=.o)
 
 TARGET = ucharts
@@ -177,6 +177,18 @@ $(TEST_OBJS_DIR)/toast.o: toast.cpp | $(TEST_OBJS_DIR)
 test_toast: test_toast.cpp $(TEST_OBJS_DIR)/toast.o test_common.h
 	$(CXX) $(TEST_CXXFLAGS) -DTOAST_TEST_MODE -o $@ test_toast.cpp $(TEST_OBJS_DIR)/toast.o $(TEST_LDFLAGS)
 
+# S/R calculator test
+TEST_SR_OBJ = $(TEST_OBJS_DIR)/sr_calculator.o
+
+test_sr_calculator: test_sr_calculator.cpp $(TEST_SR_OBJ) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_sr_calculator.cpp $(TEST_SR_OBJ) $(TEST_LDFLAGS)
+
+# Signal detector test
+TEST_SIGNAL_OBJ = $(TEST_OBJS_DIR)/signal_detector.o
+
+test_signal_detector: test_signal_detector.cpp $(TEST_SIGNAL_OBJ) $(TEST_SR_OBJ) test_common.h
+	$(CXX) $(TEST_CXXFLAGS) -o $@ test_signal_detector.cpp $(TEST_SIGNAL_OBJ) $(TEST_SR_OBJ) $(TEST_LDFLAGS)
+
 # Mock servers for integration testing (Go)
 contrib/fake_iqfeed: contrib/fake_iqfeed.go
 	cd contrib && go build -o fake_iqfeed fake_iqfeed.go
@@ -207,7 +219,7 @@ thread-check-strict:
 	@echo "Strict analysis complete (some warnings expected - documents lock acquisition points)!"
 
 clean:
-	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_tradezero_config test_tradezero_client test_tradezero_websocket test_toast test_ucharts.db test_order_manager.db test_integration.db
+	rm -f $(MAIN_OBJS) $(IMGUI_OBJS) $(TARGET) test_logic test_database test_market_data test_order_manager test_integration test_async_io test_threading tsan_threading test_tradezero_config test_tradezero_client test_tradezero_websocket test_toast test_sr_calculator test_signal_detector test_ucharts.db test_order_manager.db test_integration.db
 	rm -rf $(TEST_OBJS_DIR)
 	rm -f contrib/fake_iqfeed contrib/fake_tradezero contrib/test_with_mocks
 	rm -f .fake_iqfeed.pid .fake_tradezero.pid contrib/.fake_*.pid

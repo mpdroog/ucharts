@@ -244,14 +244,17 @@ void PositionsWidget::render_closed_positions(ImVec2 size) {
     if (ImGui::BeginChild("ClosedPositions", ImVec2(size.x, available), false)) {
         // Column headers
         ImGui::PushStyleColor(ImGuiCol_Text, make_color(150, 150, 150, 255));
-        float col_width = size.x / 4.0f;
-        ImGui::Columns(4, "ClosedHeader", false);
+        float col_width = size.x / 5.0f;
+        ImGui::Columns(5, "ClosedHeader", false);
         ImGui::SetColumnWidth(0, col_width);
-        ImGui::SetColumnWidth(1, col_width);
+        ImGui::SetColumnWidth(1, col_width * 0.7f);
         ImGui::SetColumnWidth(2, col_width);
         ImGui::SetColumnWidth(3, col_width);
+        ImGui::SetColumnWidth(4, col_width);
 
         ImGui::Text("Symbol");
+        ImGui::NextColumn();
+        ImGui::Text("Size");
         ImGui::NextColumn();
         ImGui::Text("Entry");
         ImGui::NextColumn();
@@ -268,6 +271,8 @@ void PositionsWidget::render_closed_positions(ImVec2 size) {
             std::vector<ClosedPosition> closed = m_order_mgr->get_closed_positions();
             for (const auto& pos : closed) {
                 ImGui::Text("%s", pos.symbol);
+                ImGui::NextColumn();
+                ImGui::Text("%d", pos.quantity);
                 ImGui::NextColumn();
                 ImGui::Text("%.2f", static_cast<double>(pos.entry_price));
                 ImGui::NextColumn();
