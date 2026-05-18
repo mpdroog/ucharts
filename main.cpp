@@ -1249,7 +1249,7 @@ int main(int argc, char** argv) {
                 bg_color = 0;  // No background
                 break;
 	    default:
-		LOG_W("main", "unknown MarketState %d", static_cast<int>(state));
+		LOG_W("main", "unknown MarketState %d", static_cast<int>(market_state));
 		break;
         }
 

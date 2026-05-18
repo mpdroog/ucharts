@@ -127,7 +127,7 @@ void ToastManager::render() {
                 icon = "[i]";
                 break;
 	    default:
-		LOG_W("toast", "render: unhandled ToastType %d", static_cast<int>(t.type));
+		LOG_W("toast", "render: unhandled ToastType %d", static_cast<int>(toast.type));
 		break;
         }
 

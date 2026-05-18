@@ -4,6 +4,7 @@
 
 #include "types.h"
 #include "sr_calculator.h"
+#include "logger.h"
 #include <vector>
 #include <cmath>
 
