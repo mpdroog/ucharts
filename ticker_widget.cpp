@@ -360,6 +360,14 @@ bool TickerWidget::render(ImVec2 size) {
                     if (started) {
                         LOG_I("ticker", "Async load started for: %s", m_symbol_input);
 
+                        // Unsubscribe old symbol before switching
+                        if (m_symbol[0] != '\0' && m_market != nullptr) {
+                            LOG_I("ticker", "Unsubscribing old symbol: %s", m_symbol);
+                            if (!m_market->unsubscribe_quotes(m_symbol)) {
+                                LOG_W("ticker", "Failed to unsubscribe quotes for %s", m_symbol);
+                            }
+                        }
+
                         // Clear old market data before setting new symbol
                         clear_market_data();
 
