@@ -18,8 +18,7 @@ CXXFLAGS = -std=c++17 -O2 \
     -Wcast-qual -Wcast-align \
     -Wstrict-overflow=5 -Wwrite-strings \
     -Wswitch-default -Wswitch-enum \
-    -Wunreachable-code -Wduplicated-cond -Wduplicated-branches \
-    -Wlogical-op -Wnull-dereference \
+    -Wunreachable-code -Wnull-dereference \
     -Wold-style-cast -Woverloaded-virtual \
     -Wnon-virtual-dtor -Wctor-dtor-privacy \
     -Wmissing-declarations -Wredundant-decls \
@@ -69,8 +68,8 @@ ifeq ($(UNAME_S), Darwin)
     TEST_LDFLAGS = -fsanitize=thread -L/opt/homebrew/lib -L/usr/local/lib -lsqlite3 -lcurl -lwebsockets
 else
     # Linux
-    LDFLAGS += -lglfw -lGL -ldl -lsqlite3 -lcurl
-    TEST_LDFLAGS = -fsanitize=thread -lsqlite3 -lcurl
+    LDFLAGS += -lglfw -lGL -ldl -lsqlite3 -lcurl -lwebsockets
+    TEST_LDFLAGS = -fsanitize=thread -lsqlite3 -lcurl -lwebsockets
 endif
 
 # ImGui sources

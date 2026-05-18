@@ -5,27 +5,41 @@ A professional trading platform built with Dear ImGui, GLFW, OpenGL 3, and SQLit
 ## Features
 
 - 4 ticker windows with Level 2 order book and Time & Sales
+- Real-time market data via IQFeed TCP
+- TradeZero broker integration (order routing, account management)
 - Order entry with hotkeys
 - Position management (open/closed positions)
 - 3 synchronized charts (1min, 5min, daily)
+- Multi-timeframe Support/Resistance calculation
+- 5-min resistance breakout signal detection on the 1-min chart
 - SQLite persistence for positions, orders, and settings
-- File-based market data simulation
+- Toast notification system
+- Structured logging with component-level filtering
 
 ## Architecture
 
 ```
 ucharts/
-├── main.cpp              # Entry point, main loop, grid layout
-├── types.h               # All data structures
-├── database.h/.cpp       # SQLite wrapper
-├── market_data.h/.cpp    # Level 2, Time & Sales, simulation
-├── order_manager.h/.cpp  # Order execution, position tracking
-├── chart_widget.h/.cpp   # Reusable chart component
-├── ticker_widget.h/.cpp  # Level 2 + T&S + order entry
-├── positions_widget.h/.cpp # Open/closed positions display
-├── test_*.cpp            # Test files
-├── Makefile
-└── data/                 # Test data files
+├── main.cpp                    # Entry point, main loop, grid layout
+├── types.h                     # All data structures
+├── logger.h                    # Structured stderr logging
+├── database.h/.cpp             # SQLite wrapper
+├── market_data.h/.cpp          # Level 2, Time & Sales data management
+├── order_manager.h/.cpp        # Order execution, position tracking
+├── chart_widget.h/.cpp         # Reusable chart component
+├── ticker_widget.h/.cpp        # Level 2 + T&S + order entry
+├── positions_widget.h/.cpp     # Open/closed positions display
+├── iqfeed_tcp.h/.cpp           # IQFeed TCP connection and protocol
+├── tradezero_client.h/.cpp     # TradeZero REST API client
+├── tradezero_websocket.h/.cpp  # TradeZero WebSocket (real-time quotes)
+├── http_client.h/.cpp          # libcurl HTTP client wrapper
+├── json_parser.h/.cpp          # JSON parsing (nlohmann/json)
+├── sr_calculator.h/.cpp        # Multi-timeframe S/R level calculation
+├── signal_detector.h/.cpp      # 5-min resistance breakout detection
+├── toast.h/.cpp                # On-screen toast notification system
+├── test_*.cpp                  # Test files
+├── contrib/                    # Mock servers for integration testing (Go)
+└── Makefile
 ```
 
 ## UI Layout
@@ -62,25 +76,13 @@ ucharts/
 ### macOS
 
 ```bash
-brew install glfw sqlite
+brew install glfw sqlite curl libwebsockets
 ```
 
 ### Linux (Debian/Ubuntu)
 
 ```bash
-sudo apt install libglfw3-dev libgl1-mesa-dev libsqlite3-dev
-```
-
-### Linux (Fedora)
-
-```bash
-sudo dnf install glfw-devel mesa-libGL-devel sqlite-devel
-```
-
-### Linux (Arch)
-
-```bash
-sudo pacman -S glfw-x11 mesa sqlite
+sudo apt install libglfw3-dev libgl1-mesa-dev libsqlite3-dev libcurl4-openssl-dev libwebsockets-dev nlohmann-json3-dev
 ```
 
 ## Build

@@ -573,6 +573,9 @@ bool MarketData::has_timeframe_data(const char* symbol, Timeframe tf) const {
         case Timeframe::M1: return !data.candles_1m.empty();
         case Timeframe::M5: return !data.candles_5m.empty();
         case Timeframe::DAILY: return !data.candles_daily.empty();
+	default:
+	    LOG_W("market_data", "has_timeframe_data: unhandled Timeframe %d", static_cast<int>(tf));
+	    break;
     }
     return false;
 }
@@ -658,6 +661,9 @@ bool MarketData::get_candles(const char* symbol, Timeframe tf, std::vector<Candl
         case Timeframe::M1: src = &data.candles_1m; break;
         case Timeframe::M5: src = &data.candles_5m; break;
         case Timeframe::DAILY: src = &data.candles_daily; break;
+	default:
+	    LOG_W("market_data", "get_candles: unhandled Timeframe %d", static_cast<int>(tf));
+	    break;
     }
 
     if (src == nullptr || src->empty()) {

@@ -35,6 +35,7 @@ inline void log_msg(LogLevel level, const char* component, const char* fmt, ...)
         case LOG_INFO:  level_str = "INF"; break;
         case LOG_WARN:  level_str = "WRN"; break;
         case LOG_ERROR: level_str = "ERR"; break;
+	default: break;
     }
 
     // Get current time

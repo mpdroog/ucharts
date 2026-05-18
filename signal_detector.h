@@ -54,6 +54,9 @@ struct EntrySignal {
         switch (type) {
             case SignalType::NONE: return "NONE";
             case SignalType::BREAKOUT: return "BREAKOUT";
+	    default:
+	        LOG_W("signal", "type_name: unhandled SignalType %d", static_cast<int>(type));
+	        break;
         }
         return "NONE";
     }

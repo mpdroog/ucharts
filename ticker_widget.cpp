@@ -550,6 +550,9 @@ void TickerWidget::render_time_sales(ImVec2 size, int /* max_rows */) {
                 case TradeDirection::SAME:
                     color = make_color(255, 255, 0, 255);  // Yellow
                     break;
+		default:
+		    LOG_W("ticker", "render_time_sales: unhandled TradeDirection %d", static_cast<int>(dir));
+		    break;
             }
 
             ImGui::PushStyleColor(ImGuiCol_Text, color);

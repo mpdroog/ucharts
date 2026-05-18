@@ -126,6 +126,9 @@ void ToastManager::render() {
                 border_color = make_color(60, 100, 160, alpha_byte);
                 icon = "[i]";
                 break;
+	    default:
+		LOG_W("toast", "render: unhandled ToastType %d", static_cast<int>(t.type));
+		break;
         }
 
         // Create unique window name

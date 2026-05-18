@@ -213,7 +213,7 @@ struct SymbolState {
 static SymbolState g_symbol_states[NUM_TICKERS];
 // Mutex for g_symbol_states - currently only accessed from main UI thread,
 // but mutex is here for safety if future callbacks need access
-static std::mutex g_symbol_states_mutex;
+//static std::mutex g_symbol_states_mutex;
 
 // Signal detection infrastructure (runs in main loop - fast)
 static SRCalculator g_sr_calculator;
@@ -1248,6 +1248,9 @@ int main(int argc, char** argv) {
             case MarketState::CLOSED:
                 bg_color = 0;  // No background
                 break;
+	    default:
+		LOG_W("main", "unknown MarketState %d", static_cast<int>(state));
+		break;
         }
 
         if (bg_color != 0) {
@@ -1532,7 +1535,9 @@ int main(int argc, char** argv) {
                 case 0: fullscreen_widget = &g_chart_1m; break;
                 case 1: fullscreen_widget = &g_chart_5m; break;
                 case 2: fullscreen_widget = &g_chart_daily; break;
-                default: break;
+                default:
+                    LOG_W("main", "unknown fullscreen chart index %d", g_fullscreen_chart_idx);
+                    break;
             }
 
             if (fullscreen_widget != nullptr) {
